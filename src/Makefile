@@ -4,7 +4,7 @@ COMPOSE := docker compose
 SERVICE := evilagent
 
 .PHONY: help build up down restart logs ps shell root-shell attach \
-        tools update backup restore health agent-logs lint
+        tools update backup restore health agents lint
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -25,9 +25,8 @@ restart: ## Restart the container
 logs: ## Follow container logs
 	$(COMPOSE) logs -f
 
-agent-logs: ## List captured agent output logs (audit trail)
-	$(COMPOSE) exec -u agent $(SERVICE) \
-	  bash -lc 'ls -lh ~/.local/state/evilagent/logs/ 2>/dev/null || echo "no agent logs yet"'
+agents: ## Show agent status (AgentsMonitor)
+	$(COMPOSE) exec -u agent $(SERVICE) bash -lc 'agentsmon status'
 
 ps: ## Show container status
 	$(COMPOSE) ps

@@ -29,7 +29,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # --- System dependencies -----------------------------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl wget gnupg git openssh-client \
-      tmux tini \
+      tmux tini cron \
       python3 python3-venv python3-pip \
       ffmpeg \
       bubblewrap \
@@ -51,6 +51,12 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 RUN userdel -r ubuntu 2>/dev/null || true; \
     groupadd -g 1000 agent 2>/dev/null || true; \
     useradd -m -u 1000 -g 1000 -s /bin/bash agent
+
+# /usr/bin/crontab is setgid 'crontab', and no-new-privileges strips setgid on
+# exec - so `crontab` would fail for the agent. Real membership of the group
+# grants the same access to the spool directory without any escalation, which
+# is what lets `agentsmon service` install its cron job the standard way.
+RUN usermod -aG crontab agent
 
 # --- Tool selection (configured via .env -> build args) ----------------------
 ARG INSTALL_CODEX=true

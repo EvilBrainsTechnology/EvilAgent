@@ -3,7 +3,8 @@
 #
 # Update:  docker compose build --pull && docker compose up -d
 #          (data in volumes is preserved)
-# Config:  .env – see .env.example. Agents listed as AUTOSTART_* start on boot.
+# Config:  .env – see .env.example. Agents are kept alive by AgentsMonitor via
+#          cron inside the container, not configured here (see README).
 ##############################################################################
 services:
   evilagent:
@@ -83,11 +84,12 @@ services:
       - agentsmon:/home/agent/.agentsmon
       - ssh:/home/agent/.ssh
       - workspace:/home/agent/workspace
+      - crontabs:/var/spool/cron/crontabs
 
     healthcheck:
-      # Verifies keepalive, the tmux session, AND that every AUTOSTART_* agent
-      # is still alive. Probing only keepalive would report healthy with zero
-      # agents running - which is the failure worth catching.
+      # Verifies keepalive, the tmux session, and cron - the machinery that
+      # keeps agents alive. Individual agents are AgentsMonitor's job
+      # (`make agents`); it relaunches them within a minute.
       test: ["CMD", "/usr/local/bin/container-health"]
       interval: 1m
       timeout: 10s
@@ -118,3 +120,4 @@ volumes:
   agentsmon:
   ssh:
   workspace:
+  crontabs:

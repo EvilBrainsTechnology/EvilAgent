@@ -9,9 +9,9 @@ sandbox — agents run with approval guards disabled but are isolated from the h
 via dropped capabilities, resource limits, and no Docker socket access. Tool
 binaries live in the image; all credentials and working data persist in named
 Docker volumes. Which tools are installed is controlled by `INSTALL_*` flags in
-`.env`; agents listed as `AUTOSTART_*` in `.env` start automatically in the
-shared tmux session `main` and are watched by the container healthcheck.
-See [README.md](README.md) for full setup and usage documentation.
+`.env`. Keeping agents alive 24/7 is AgentsMonitor's job, not this project's: the
+container runs cron, and `agentsmon setup` installs an `@reboot` + every-minute
+crontab. See [README.md](README.md) for full setup and usage documentation.
 
 ## Scope of the sandbox — do not overstate it
 The container contains **host damage**, not **data**. All agents share one home
@@ -28,6 +28,9 @@ making it configurable. Specifically:
 - **No API keys in `.env.example`.** Every tool authenticates interactively and
   stores credentials in its own volume; auth is set up once per tool.
 - **No version pins or checksums in configuration.** Tools install at `@latest`.
+- **Don't reimplement what a bundled tool already does.** Supervising agents is
+  AgentsMonitor's job; the container just provides cron so it can do it the
+  standard way. Prefer giving a tool what it expects over writing our own.
 - New config options need a real use case, not a hypothetical one.
 
 ## Conventions

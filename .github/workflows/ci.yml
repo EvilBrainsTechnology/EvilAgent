@@ -61,7 +61,7 @@ jobs:
             --build-arg INSTALL_WHISPER=false
 
   smoke:
-    name: Smoke test (boot, health, autostart)
+    name: Smoke test (boot, health, cron)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -71,15 +71,15 @@ jobs:
         run: |
           cp .env.example .env
           # Only the npm-installed tools; keep the image small and reliable.
+          # AgentsMonitor is left out on purpose: CI must not go red because a
+          # third-party repo is down. We test the contract the container offers
+          # it - a working cron - rather than the tool itself.
           sed -i 's/^INSTALL_AGENT2TELEGRAM=.*/INSTALL_AGENT2TELEGRAM=false/' .env
           sed -i 's/^INSTALL_HERMES=.*/INSTALL_HERMES=false/' .env
           sed -i 's/^INSTALL_OPENCLAW=.*/INSTALL_OPENCLAW=false/' .env
           sed -i 's/^INSTALL_AGENTSMONITOR=.*/INSTALL_AGENTSMONITOR=false/' .env
           sed -i 's/^INSTALL_ANTIGRAVITY=.*/INSTALL_ANTIGRAVITY=false/' .env
           sed -i 's/^INSTALL_WHISPER=.*/INSTALL_WHISPER=false/' .env
-          # A trivial autostart agent, to prove the supervisor and the
-          # healthcheck actually observe it.
-          echo 'AUTOSTART_SMOKE=sleep 3600' >> .env
 
       - name: Start
         working-directory: ./src
@@ -111,17 +111,49 @@ jobs:
           echo "$out" | grep -q 'hermes.*disabled'  || { echo "hermes should read as disabled" >&2; exit 1; }
           echo "$out" | grep -q 'whisper.*disabled' || { echo "whisper should read as disabled" >&2; exit 1; }
 
-      - name: Autostart agent is running
+      - name: Agent can install a crontab despite no-new-privileges
         working-directory: ./src
         run: |
-          docker compose exec -T -u agent evilagent tmux has-session -t main:smoke
+          # /usr/bin/crontab is setgid 'crontab' and no-new-privileges strips
+          # setgid on exec; the agent is a real member of the group instead.
+          # This is what `agentsmon service` depends on.
+          docker compose exec -T -u agent evilagent bash -lc \
+            'echo "* * * * * date >> /tmp/cron-proof.log" | crontab -'
+          docker compose exec -T -u agent evilagent bash -lc 'crontab -l'
 
-      - name: Healthcheck fails when an autostart agent dies
+      - name: Cron actually executes the job
         working-directory: ./src
         run: |
-          docker compose exec -T -u agent evilagent tmux kill-window -t main:smoke
+          for i in $(seq 1 15); do
+            if docker compose exec -T -u agent evilagent test -s /tmp/cron-proof.log; then
+              echo "cron ran the job:"
+              docker compose exec -T -u agent evilagent cat /tmp/cron-proof.log
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "cron never executed the job - 24/7 operation would silently not work" >&2
+          docker compose exec -T -u root evilagent pgrep -ax cron || echo "cron not running"
+          exit 1
+
+      - name: Crontab survives a container recreate
+        working-directory: ./src
+        run: |
+          # The spool is outside $HOME; without its volume a rebuild would
+          # silently drop every cron job.
+          docker compose down
+          docker compose up -d
+          sleep 15
+          docker compose exec -T -u agent evilagent bash -lc 'crontab -l' | grep -q 'cron-proof' \
+            || { echo "crontab was lost on recreate" >&2; exit 1; }
+          echo "crontab survived"
+
+      - name: Healthcheck fails when cron dies
+        working-directory: ./src
+        run: |
+          docker compose exec -T -u root evilagent pkill -x cron
           if docker compose exec -T -u root evilagent /usr/local/bin/container-health; then
-            echo "healthcheck stayed green with a dead agent - it is not watching them" >&2
+            echo "healthcheck stayed green with cron dead - nothing would restart agents" >&2
             exit 1
           fi
           echo "healthcheck correctly reported unhealthy"

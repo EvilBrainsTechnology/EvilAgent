@@ -97,9 +97,9 @@ make shell                  # or: docker compose exec -u agent evilagent bash -l
 > All `make` and `docker compose` commands must be run from the `src/` directory.
 > From the project root use `make -C src <target>` or `cd src` once at the start of a session.
 
-After start the container brings up the shared tmux session `main` and starts any
-agents you configured via `AUTOSTART_*` (see *Running agents 24/7*). With no
-autostart configured, you **configure and start agents manually** — see below.
+After start the container brings up the shared tmux session `main` and runs cron.
+You **configure and start agents manually** (see below), then hand them to
+AgentsMonitor to keep alive — see *Running agents 24/7*.
 
 ### Choosing which tools to install
 
@@ -167,9 +167,13 @@ nohup openclaw gateway > ~/openclaw.log 2>&1 &
 ```
 
 ### AgentsMonitor (monitoring + automatic recovery)
+This is what keeps agents alive across restarts — see *Running agents 24/7*.
 ```bash
-agentsmon add              # register running agents for monitoring
-agentsmon new              # create a new monitored agent
+agentsmon setup            # scan tmux, pick agents to supervise, install cron launcher
+agentsmon new              # create + launch + register a new agent in one step
+agentsmon add              # register agents you started yourself
+agentsmon status           # live status of agents and daemons
+agentsmon doctor           # sanity-check tools + config
 ```
 
 ### Google Antigravity
@@ -197,53 +201,59 @@ Interactive setup is one-time, but a hand-started agent lives only as long as th
 container process does. A restart, a host reboot, or an OOM kill would otherwise
 bring the container back **healthy and empty** — with no agents running at all.
 
-Once a tool is configured, list it in `.env` and it starts with the container:
+This is **AgentsMonitor's** job, and there is nothing to configure in `.env` for
+it. It auto-detects agents in tmux, relaunches them properly when they crash
+(e.g. `claude --resume <id>`), and persists itself with **cron** — which this
+container runs. Inside the container:
 
 ```bash
-AUTOSTART_MASTER=codex --dangerously-bypass-approvals-and-sandbox
-AUTOSTART_CLAUDE=claude --dangerously-skip-permissions
+agentsmon setup            # scans tmux, pick which agents to supervise,
+                           # then installs its cron launcher
 ```
 
-Each `AUTOSTART_<NAME>` becomes a tmux window named `<name>` in the shared
-session `main`:
+That writes an `@reboot` + every-minute crontab, so your agents come back after a
+restart and get relaunched if they die. Check on them any time:
 
 ```bash
-make attach            # attach to the session (Ctrl+B then W lists windows)
-                       # detach with Ctrl+B then D
+make agents                # = agentsmon status
 ```
 
-Restart the container to apply changes: `docker compose up -d`.
+To spin up a new agent already registered for supervision, use `agentsmon new`.
+The shared tmux session `main` is there for working by hand:
 
-### Health and recovery
+```bash
+make attach                # Ctrl+B then W lists windows, Ctrl+B then D detaches
+```
 
-The container healthcheck watches **exactly these agents**. If one exits, the
-window is kept (`remain-on-exit`) so you can read its last output, and the
-container is reported **unhealthy**:
+Everything this relies on is on a volume and survives a rebuild: the config
+(`~/.config/agentsmon`), the state and uptime database (`~/.local/state/agentsmon`),
+and the crontab itself (`/var/spool/cron/crontabs`).
+
+> Without AgentsMonitor (`INSTALL_AGENTSMONITOR=false`) nothing starts agents for
+> you — but cron is still there, so `crontab -e` with an `@reboot` line of your
+> own works the same way.
+
+### Health
+
+The container healthcheck verifies the **machinery**, not the agents: keepalive,
+the tmux session, and cron. A single crashed agent is not a container fault —
+AgentsMonitor relaunches it within a minute, and `make agents` shows the truth.
+Cron dying, on the other hand, means nothing would restart anything, so that
+turns the container **unhealthy**:
 
 ```bash
 docker compose ps                       # STATUS column shows (unhealthy)
 docker inspect --format '{{json .State.Health}}' evilagent | jq
 ```
 
-Docker's `restart: unless-stopped` does not act on health status. For automatic
-recovery either configure **AgentsMonitor** (which is what it's for) or run a
-watchdog such as `willfarrell/autoheal` alongside the container.
+Docker's `restart: unless-stopped` does not act on health status, so if you want
+the container itself recycled when it goes unhealthy, run a watchdog such as
+`willfarrell/autoheal` alongside it.
 
-### Agent logs (audit trail)
-
-Every autostarted agent's output is captured to a log file — worth having, since
-these agents run with approvals disabled and you would otherwise have no record
-of what they did:
-
-```bash
-make agent-logs                                    # list logs
-make shell
-tail -f ~/.local/state/evilagent/logs/master.log   # follow one agent
-```
-
-Logs live in the `localstate` volume and are included in backups. They are **not
-rotated** — if you run agents continuously, add a `logrotate` entry or truncate
-them periodically.
+AgentsMonitor logs its own supervision to `~/.local/state/agentsmon/agentsmon.log`
+and serves a status page (`agentsmon dashboard`, default `127.0.0.1:8765`). Note
+that this records *supervision* — restarts and uptime — not the agents' terminal
+output, so it is not an audit trail of what an agent actually did.
 
 ---
 
@@ -257,7 +267,8 @@ image rebuilds**:
 | `codex`, `claude`, `hermes`, `openclaw`, `agent2telegram`, `agentsmon` | per-tool config and credentials |
 | `config` | XDG config, `gcloud` |
 | `cache` | downloaded Whisper models, etc. |
-| `localstate` | agent logs (`~/.local/state`) |
+| `localstate` | AgentsMonitor state, uptime DB, its log (`~/.local/state`) |
+| `crontabs` | cron jobs (`agentsmon service`) — lives outside `$HOME` |
 | `ssh` | agent SSH keys |
 | `workspace` | working directory / repositories / agent data |
 
@@ -323,7 +334,7 @@ accepts both absolute and relative paths.
 | `make root-shell` | shell as `root` (administration) |
 | `make attach` | attach to shared tmux session `main` |
 | `make logs` | follow container logs |
-| `make agent-logs` | list captured agent output logs |
+| `make agents` | agent status (AgentsMonitor) |
 | `make health` | show tool availability |
 | `make tools` | reinstall / update tools |
 | `make update` | full update |
@@ -358,9 +369,10 @@ make lint          # shellcheck + hadolint + compose validation
 
 CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs the same linters, builds
 the image with the reliable tools only, and smoke-tests that the container boots,
-that `evilagent-health` respects the `INSTALL_*` flags, that an autostarted agent
-runs, that the healthcheck goes red when that agent dies, and that a backup
-produces a verifiable archive.
+that `evilagent-health` respects the `INSTALL_*` flags, that the agent can install
+a crontab and cron executes it, that the crontab survives a container recreate,
+that the healthcheck goes red when cron dies, and that a backup produces a
+verifiable archive.
 
 ---
 
@@ -373,10 +385,13 @@ produces a verifiable archive.
   [`src/scripts/install-tools.sh`](src/scripts/install-tools.sh) and run `make tools`.
   Codex and Claude Code install via npm and are **required** — if one of them
   fails, the build fails rather than handing you an image without it.
-- **Container is `unhealthy`.** An autostarted agent exited. Find out which:
-  `docker inspect --format '{{json .State.Health}}' evilagent | jq`, then read its
-  last output — the dead tmux window is kept on purpose (`make attach`, `Ctrl+B` `W`)
-  and its log is in `~/.local/state/evilagent/logs/`.
+- **Container is `unhealthy`.** The machinery is broken, not an agent. See why:
+  `docker inspect --format '{{json .State.Health}}' evilagent | jq`. For agents
+  themselves use `make agents` — a crashed agent is AgentsMonitor's job and does
+  not turn the container unhealthy.
+- **Agents don't come back after a restart.** Check `crontab -l` inside the
+  container as `agent`: `agentsmon setup` should have installed an `@reboot` and
+  an every-minute line. Verify cron is running with `pgrep -x cron`.
 - **`sudo` doesn't work inside the container.** Correct — it is intentionally
   blocked by `no-new-privileges`. Use `make root-shell` for administration, or
   add permanent changes to `src/Dockerfile` and rebuild.
@@ -407,7 +422,7 @@ produces a verifiable archive.
     ├── Makefile                  # shortcuts
     └── scripts/
         ├── install-tools.sh      # install/update CLI tools
-        ├── entrypoint.sh         # volume init + autostart agents + drop to agent user
+        ├── entrypoint.sh         # volume init + cron + drop to agent user
         ├── health.sh             # tool inventory (`make health`)
         ├── container-health.sh   # Docker healthcheck probe
         ├── voice2text.sh         # Whisper audio -> text transcription
