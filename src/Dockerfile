@@ -58,7 +58,7 @@ RUN userdel -r ubuntu 2>/dev/null || true; \
 # is what lets `agentsmon service` install its cron job the standard way.
 RUN usermod -aG crontab agent
 
-# --- Tool selection (configured via .env -> build args) ----------------------
+# --- Tool selection (all installed by default; override via --build-arg) -----
 ARG INSTALL_CODEX=true
 ARG INSTALL_CLAUDE_CODE=true
 ARG INSTALL_AGENT2TELEGRAM=true
@@ -67,6 +67,18 @@ ARG INSTALL_OPENCLAW=true
 ARG INSTALL_AGENTSMONITOR=true
 ARG INSTALL_ANTIGRAVITY=true
 ARG INSTALL_WHISPER=true
+
+# Bake the build-time flags into the image so health.sh and `make tools` can
+# distinguish "disabled at build time" from "install failed" without needing
+# .env to be mounted. ARG values do not persist after build; ENV does.
+ENV INSTALL_CODEX=${INSTALL_CODEX} \
+    INSTALL_CLAUDE_CODE=${INSTALL_CLAUDE_CODE} \
+    INSTALL_AGENT2TELEGRAM=${INSTALL_AGENT2TELEGRAM} \
+    INSTALL_HERMES=${INSTALL_HERMES} \
+    INSTALL_OPENCLAW=${INSTALL_OPENCLAW} \
+    INSTALL_AGENTSMONITOR=${INSTALL_AGENTSMONITOR} \
+    INSTALL_ANTIGRAVITY=${INSTALL_ANTIGRAVITY} \
+    INSTALL_WHISPER=${INSTALL_WHISPER}
 
 # --- Whisper (voice control) in an isolated venv -----------------------------
 # faster-whisper: CPU, int8, no torch. Good enough for transcription and a
@@ -93,7 +105,7 @@ RUN chmod +x /usr/local/bin/evilagent-health /usr/local/bin/container-health \
              /usr/local/bin/entrypoint.sh /usr/local/bin/voice2text
 
 # --- Install agent CLIs (runs at build time) ---------------------------------
-# INSTALL_* build args control which tools are installed (see .env.example).
+# INSTALL_* build args control which tools are installed (default: all).
 # Exit code is decided by install-tools.sh: Codex/Claude Code are required, the
 # third-party installers are best-effort. No blanket `|| true` here - that would
 # let a build in which every single tool failed still produce a usable-looking

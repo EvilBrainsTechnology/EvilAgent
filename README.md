@@ -103,26 +103,17 @@ AgentsMonitor to keep alive — see *Running agents 24/7*.
 
 ### Choosing which tools to install
 
-You don't have to install (and configure) everything. Each tool has an
-`INSTALL_*` flag in `.env` (default `true`):
+All tools are installed by default. To exclude one, pass a build arg:
 
 ```bash
-# example: only Claude Code + Telegram bridge + monitoring
-INSTALL_CODEX=false
-INSTALL_CLAUDE_CODE=true
-INSTALL_AGENT2TELEGRAM=true
-INSTALL_HERMES=false
-INSTALL_OPENCLAW=false
-INSTALL_AGENTSMONITOR=true
-INSTALL_ANTIGRAVITY=false
-INSTALL_WHISPER=false
+docker compose build --build-arg INSTALL_HERMES=false
 ```
 
-The flags apply at image build time — after changing them, run
-`docker compose build && docker compose up -d` (or `make update`).
-`make health` shows which tools are present; disabled tools are listed
-as `disabled` rather than missing, so a deliberately-skipped tool never looks
-like a broken build.
+Available flags: `INSTALL_CODEX`, `INSTALL_CLAUDE_CODE`, `INSTALL_AGENT2TELEGRAM`,
+`INSTALL_HERMES`, `INSTALL_OPENCLAW`, `INSTALL_AGENTSMONITOR`, `INSTALL_ANTIGRAVITY`,
+`INSTALL_WHISPER`.
+
+`make health` shows which tools are present in the running container.
 
 ---
 

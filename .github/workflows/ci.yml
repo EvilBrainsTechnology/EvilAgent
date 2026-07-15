@@ -24,8 +24,8 @@ jobs:
         uses: hadolint/hadolint-action@v3.1.0
         with:
           dockerfile: src/Dockerfile
-          # DL3008/DL3013: apt/pip version pinning - deliberately unpinned for
-          #   OS packages; agent tool versions are pinned via *_VERSION in .env.
+          # DL3008/DL3013: apt/pip version pinning - deliberately unpinned;
+          #   tools install at @latest.
           # SC2016: the profile.d heredoc writes literal $PATH on purpose.
           ignore: DL3008,DL3013,SC2016
 
@@ -68,22 +68,26 @@ jobs:
 
       - name: Prepare .env
         working-directory: ./src
+        run: cp .env.example .env
+
+      - name: Build (core tools only)
+        working-directory: ./src
+        # Only the npm-installed tools; keep the image small and reliable.
+        # AgentsMonitor is left out on purpose: CI must not go red because a
+        # third-party repo is down. We test the contract the container offers
+        # it - a working cron - rather than the tool itself.
         run: |
-          cp .env.example .env
-          # Only the npm-installed tools; keep the image small and reliable.
-          # AgentsMonitor is left out on purpose: CI must not go red because a
-          # third-party repo is down. We test the contract the container offers
-          # it - a working cron - rather than the tool itself.
-          sed -i 's/^INSTALL_AGENT2TELEGRAM=.*/INSTALL_AGENT2TELEGRAM=false/' .env
-          sed -i 's/^INSTALL_HERMES=.*/INSTALL_HERMES=false/' .env
-          sed -i 's/^INSTALL_OPENCLAW=.*/INSTALL_OPENCLAW=false/' .env
-          sed -i 's/^INSTALL_AGENTSMONITOR=.*/INSTALL_AGENTSMONITOR=false/' .env
-          sed -i 's/^INSTALL_ANTIGRAVITY=.*/INSTALL_ANTIGRAVITY=false/' .env
-          sed -i 's/^INSTALL_WHISPER=.*/INSTALL_WHISPER=false/' .env
+          docker compose build \
+            --build-arg INSTALL_AGENT2TELEGRAM=false \
+            --build-arg INSTALL_HERMES=false \
+            --build-arg INSTALL_OPENCLAW=false \
+            --build-arg INSTALL_AGENTSMONITOR=false \
+            --build-arg INSTALL_ANTIGRAVITY=false \
+            --build-arg INSTALL_WHISPER=false
 
       - name: Start
         working-directory: ./src
-        run: docker compose up -d --build
+        run: docker compose up -d
 
       - name: Wait for healthy
         working-directory: ./src
@@ -107,9 +111,9 @@ jobs:
           echo "$out"
           echo "$out" | grep -q 'OK.*codex'    || { echo "codex should be installed" >&2; exit 1; }
           echo "$out" | grep -q 'OK.*claude'   || { echo "claude should be installed" >&2; exit 1; }
-          # Disabled tools must read as "disabled", never as missing.
-          echo "$out" | grep -q 'hermes.*disabled'  || { echo "hermes should read as disabled" >&2; exit 1; }
-          echo "$out" | grep -q 'whisper.*disabled' || { echo "whisper should read as disabled" >&2; exit 1; }
+          # Tools excluded via --build-arg must show as disabled, never as missing.
+          echo "$out" | grep -q 'hermes.*disabled'  || { echo "hermes should show as disabled" >&2; exit 1; }
+          echo "$out" | grep -q 'whisper.*disabled' || { echo "whisper should show as disabled" >&2; exit 1; }
 
       - name: Agent can install a crontab despite no-new-privileges
         working-directory: ./src

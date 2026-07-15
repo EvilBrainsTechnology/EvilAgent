@@ -10,16 +10,6 @@ services:
   evilagent:
     build:
       context: .
-      args:
-        # Tool selection – configured in .env, defaults to installing everything
-        INSTALL_CODEX: "${INSTALL_CODEX:-true}"
-        INSTALL_CLAUDE_CODE: "${INSTALL_CLAUDE_CODE:-true}"
-        INSTALL_AGENT2TELEGRAM: "${INSTALL_AGENT2TELEGRAM:-true}"
-        INSTALL_HERMES: "${INSTALL_HERMES:-true}"
-        INSTALL_OPENCLAW: "${INSTALL_OPENCLAW:-true}"
-        INSTALL_AGENTSMONITOR: "${INSTALL_AGENTSMONITOR:-true}"
-        INSTALL_ANTIGRAVITY: "${INSTALL_ANTIGRAVITY:-true}"
-        INSTALL_WHISPER: "${INSTALL_WHISPER:-true}"
     image: evilagent:latest
     container_name: "${CONTAINER_NAME:-evilagent}"
     hostname: "${CONTAINER_NAME:-evilagent}"

@@ -8,8 +8,8 @@ Agent2Telegram, AgentsMonitor, Whisper). The container acts as the security
 sandbox — agents run with approval guards disabled but are isolated from the host
 via dropped capabilities, resource limits, and no Docker socket access. Tool
 binaries live in the image; all credentials and working data persist in named
-Docker volumes. Which tools are installed is controlled by `INSTALL_*` flags in
-`.env`. Keeping agents alive 24/7 is AgentsMonitor's job, not this project's: the
+Docker volumes. All tools are installed by default; individual tools can be excluded with
+`--build-arg INSTALL_<TOOL>=false` at build time. Keeping agents alive 24/7 is AgentsMonitor's job, not this project's: the
 container runs cron, and `agentsmon setup` installs an `@reboot` + every-minute
 crontab. See [README.md](README.md) for full setup and usage documentation.
 

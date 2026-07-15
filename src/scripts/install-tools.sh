@@ -8,10 +8,9 @@
 #       docker compose exec -u root evilagent \
 #           /usr/local/lib/evilagent/install-tools.sh
 #
-# Tool selection: each tool is guarded by an INSTALL_<TOOL> env var
-# (default: true). At build time these come from build args (.env ->
-# docker-compose), at runtime from the container environment (env_file),
-# so `make tools` respects the same .env configuration.
+# Tool selection: each tool can be excluded with INSTALL_<TOOL>=false passed
+# as a --build-arg. All tools are installed by default. Running `make tools`
+# inside a running container reinstalls everything (no args needed).
 #
 # Failure handling:
 #   - Codex and Claude Code install via npm and are RELIABLE, so if one of them
@@ -154,8 +153,8 @@ if [ ${#REQUIRED_MISSING[@]} -gt 0 ]; then
   echo
   warn "Failed to install: ${REQUIRED_MISSING[*]}"
   warn "These install via npm and are expected to work - failing rather than"
-  warn "producing an image without the agent you asked for. Set INSTALL_<TOOL>=false"
-  warn "if you don't need it."
+  warn "producing an image without the agent you asked for."
+  warn "Pass --build-arg INSTALL_<TOOL>=false to exclude a tool from the build."
   exit 1
 fi
 echo

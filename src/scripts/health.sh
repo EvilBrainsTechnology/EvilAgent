@@ -1,15 +1,13 @@
 #!/usr/bin/env bash
 ##############################################################################
-# evilagent-health - tool inventory.
+# evilagent-health – tool inventory.
 #
-# Prints which agent CLIs are present, respecting the INSTALL_* flags so a
-# deliberately disabled tool reads as "disabled" rather than "missing".
+# Prints which agent CLIs are present. Used by `make health` and by the
+# summary at the end of install-tools.sh.
 #
-# Single source of truth for the tool list: used both by `make health` and by
-# the summary at the end of install-tools.sh.
-#
-# Works as root or as agent: tools install into the agent's ~/.local/bin, which
-# is not on root's PATH by default.
+# INSTALL_* env vars are baked into the image at build time (Dockerfile ARG
+# -> ENV), so a tool excluded via --build-arg shows as "disabled" rather
+# than missing - a deliberate exclusion never looks like a broken build.
 ##############################################################################
 set -uo pipefail
 
@@ -34,15 +32,15 @@ declare -A TOOL_FLAGS=(
 TOOL_ORDER=(codex claude agy hermes openclaw agent2telegram agentsmon)
 
 ok()       { printf '  \033[1;32m OK  \033[0m %s\n' "$1"; }
-missing()  { printf '  \033[1;31mMISS \033[0m %s (enabled but not installed)\n' "$1"; }
-disabled() { printf '  \033[1;90m  -  \033[0m %s (disabled via INSTALL_%s=false)\n' "$1" "$2"; }
+missing()  { printf '  \033[1;31mMISS \033[0m %s\n' "$1"; }
+disabled() { printf '  \033[1;90m  -  \033[0m %s (disabled)\n' "$1"; }
 
 for tool in "${TOOL_ORDER[@]}"; do
   flag="${TOOL_FLAGS[$tool]}"
   if command -v "$tool" >/dev/null 2>&1; then
     ok "$tool"
   elif ! enabled "$flag"; then
-    disabled "$tool" "$flag"
+    disabled "$tool"
   else
     missing "$tool"
   fi
@@ -52,9 +50,9 @@ done
 # voice2text wrapper.
 if [ -x /opt/whisper-venv/bin/python ] \
    && /opt/whisper-venv/bin/python -c 'import faster_whisper' 2>/dev/null; then
-  ok "whisper (faster-whisper) - command: voice2text"
+  ok "whisper (voice2text)"
 elif ! enabled WHISPER; then
-  disabled "whisper" "WHISPER"
+  disabled "whisper (voice2text)"
 else
-  missing "whisper (faster-whisper)"
+  missing "whisper (voice2text)"
 fi
