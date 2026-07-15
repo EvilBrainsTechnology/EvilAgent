@@ -1,0 +1,140 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  lint:
+    name: Lint shell, Dockerfile and compose
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The repo is essentially all shell + Dockerfile, so static analysis is
+      # most of the test suite we can have without a live Docker daemon.
+      - name: shellcheck
+        uses: ludeeus/action-shellcheck@master
+        with:
+          scandir: ./src/scripts
+          severity: warning
+
+      - name: hadolint
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: src/Dockerfile
+          # DL3008/DL3013: apt/pip version pinning - deliberately unpinned for
+          #   OS packages; agent tool versions are pinned via *_VERSION in .env.
+          # SC2016: the profile.d heredoc writes literal $PATH on purpose.
+          ignore: DL3008,DL3013,SC2016
+
+      - name: Validate docker-compose
+        working-directory: ./src
+        run: |
+          cp .env.example .env
+          docker compose config -q
+          echo "compose config OK"
+
+  build:
+    name: Build image (core tools only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Build with only the tools whose installers are reliable. The webinar
+      # URLs for the third-party tools are frequently unavailable and would make
+      # CI red for reasons unrelated to this repo. Codex and Claude Code are
+      # required by install-tools.sh, so this build fails if they break.
+      - name: Build
+        working-directory: ./src
+        run: |
+          cp .env.example .env   # compose requires the env_file to exist
+          docker compose build \
+            --build-arg INSTALL_CODEX=true \
+            --build-arg INSTALL_CLAUDE_CODE=true \
+            --build-arg INSTALL_AGENT2TELEGRAM=false \
+            --build-arg INSTALL_HERMES=false \
+            --build-arg INSTALL_OPENCLAW=false \
+            --build-arg INSTALL_AGENTSMONITOR=false \
+            --build-arg INSTALL_ANTIGRAVITY=false \
+            --build-arg INSTALL_WHISPER=false
+
+  smoke:
+    name: Smoke test (boot, health, autostart)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare .env
+        working-directory: ./src
+        run: |
+          cp .env.example .env
+          # Only the npm-installed tools; keep the image small and reliable.
+          sed -i 's/^INSTALL_AGENT2TELEGRAM=.*/INSTALL_AGENT2TELEGRAM=false/' .env
+          sed -i 's/^INSTALL_HERMES=.*/INSTALL_HERMES=false/' .env
+          sed -i 's/^INSTALL_OPENCLAW=.*/INSTALL_OPENCLAW=false/' .env
+          sed -i 's/^INSTALL_AGENTSMONITOR=.*/INSTALL_AGENTSMONITOR=false/' .env
+          sed -i 's/^INSTALL_ANTIGRAVITY=.*/INSTALL_ANTIGRAVITY=false/' .env
+          sed -i 's/^INSTALL_WHISPER=.*/INSTALL_WHISPER=false/' .env
+          # A trivial autostart agent, to prove the supervisor and the
+          # healthcheck actually observe it.
+          echo 'AUTOSTART_SMOKE=sleep 3600' >> .env
+
+      - name: Start
+        working-directory: ./src
+        run: docker compose up -d --build
+
+      - name: Wait for healthy
+        working-directory: ./src
+        run: |
+          for i in $(seq 1 30); do
+            status=$(docker inspect --format '{{.State.Health.Status}}' evilagent 2>/dev/null || echo starting)
+            echo "health: $status"
+            [ "$status" = "healthy" ] && exit 0
+            [ "$status" = "unhealthy" ] && break
+            sleep 10
+          done
+          echo "container did not become healthy" >&2
+          docker compose logs
+          docker inspect --format '{{json .State.Health}}' evilagent || true
+          exit 1
+
+      - name: Tool inventory reflects INSTALL_* flags
+        working-directory: ./src
+        run: |
+          out=$(docker compose exec -T -u agent evilagent /usr/local/bin/evilagent-health)
+          echo "$out"
+          echo "$out" | grep -q 'OK.*codex'    || { echo "codex should be installed" >&2; exit 1; }
+          echo "$out" | grep -q 'OK.*claude'   || { echo "claude should be installed" >&2; exit 1; }
+          # Disabled tools must read as "disabled", never as missing.
+          echo "$out" | grep -q 'hermes.*disabled'  || { echo "hermes should read as disabled" >&2; exit 1; }
+          echo "$out" | grep -q 'whisper.*disabled' || { echo "whisper should read as disabled" >&2; exit 1; }
+
+      - name: Autostart agent is running
+        working-directory: ./src
+        run: |
+          docker compose exec -T -u agent evilagent tmux has-session -t main:smoke
+
+      - name: Healthcheck fails when an autostart agent dies
+        working-directory: ./src
+        run: |
+          docker compose exec -T -u agent evilagent tmux kill-window -t main:smoke
+          if docker compose exec -T -u root evilagent /usr/local/bin/container-health; then
+            echo "healthcheck stayed green with a dead agent - it is not watching them" >&2
+            exit 1
+          fi
+          echo "healthcheck correctly reported unhealthy"
+
+      - name: Backup fails loudly rather than reporting a phantom success
+        working-directory: ./src
+        run: |
+          ./scripts/backup.sh
+          test -s backups/*/agent-data.tar.gz
+          tar tzf backups/*/agent-data.tar.gz >/dev/null
+          echo "backup produced a verifiable archive"
+
+      - name: Teardown
+        if: always()
+        working-directory: ./src
+        run: docker compose down -v

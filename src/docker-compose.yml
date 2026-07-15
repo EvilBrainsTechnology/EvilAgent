@@ -3,15 +3,13 @@
 #
 # Update:  docker compose build --pull && docker compose up -d
 #          (data in volumes is preserved)
-# Config:  done manually after first start, see README.md
+# Config:  .env – see .env.example. Agents listed as AUTOSTART_* start on boot.
 ##############################################################################
 services:
   evilagent:
     build:
       context: .
       args:
-        AGENT_UID: "${AGENT_UID:-1000}"
-        AGENT_GID: "${AGENT_GID:-1000}"
         # Tool selection – configured in .env, defaults to installing everything
         INSTALL_CODEX: "${INSTALL_CODEX:-true}"
         INSTALL_CLAUDE_CODE: "${INSTALL_CLAUDE_CODE:-true}"
@@ -21,31 +19,39 @@ services:
         INSTALL_AGENTSMONITOR: "${INSTALL_AGENTSMONITOR:-true}"
         INSTALL_ANTIGRAVITY: "${INSTALL_ANTIGRAVITY:-true}"
         INSTALL_WHISPER: "${INSTALL_WHISPER:-true}"
-        INSTALL_OPENAI_WHISPER: "${INSTALL_OPENAI_WHISPER:-false}"
     image: evilagent:latest
-    container_name: evilagent
-    hostname: evilagent
+    container_name: "${CONTAINER_NAME:-evilagent}"
+    hostname: "${CONTAINER_NAME:-evilagent}"
     restart: unless-stopped
     init: false                       # PID 1 is handled by tini inside the image
     stop_grace_period: 30s
 
-    # Secrets (API keys, tokens) are passed via .env – NEVER baked into the image.
+    # Configuration (and any keys you choose to add) is passed via .env – NEVER
+    # baked into the image. Tool credentials come from interactive login and
+    # live in the volumes below.
     env_file:
       - .env
 
     # -------------------------------- SECURITY --------------------------------
+    # This configuration contains HOST DAMAGE. It does not contain DATA:
+    # outbound network access is unrestricted by default and all agents share
+    # one home directory. See README.md.
     security_opt:
       - no-new-privileges:true        # prevents privilege escalation (blocks setuid/sudo)
     cap_drop:
       - ALL                           # drop all Linux capabilities ...
     cap_add:                          # ... and restore only the minimum needed by entrypoint
-      - CHOWN
-      - FOWNER
+      # These are held ONLY by the root-run entrypoint, which immediately drops
+      # to the unprivileged 'agent' user. Agents themselves are uid 1000 and
+      # hold no capabilities, so this does not loosen their confinement.
+      - CHOWN                         # take ownership of freshly created volumes
+      - DAC_OVERRIDE                  # traverse/write /home/agent (mode 0750, owned by agent)
+      - FOWNER                        # chmod 700 ~/.ssh, which root does not own
       - SETUID                        # runuser: drop from root to agent
       - SETGID
     pids_limit: 4096                  # guard against a fork-bombing agent
     mem_limit: "${MEM_LIMIT:-6g}"
-    memswap_limit: "${MEM_LIMIT:-6g}"
+    memswap_limit: "${MEM_LIMIT:-6g}" # equal to mem_limit = swap disabled
     cpus: "${CPUS:-4}"
     ulimits:
       nofile:
@@ -79,13 +85,14 @@ services:
       - workspace:/home/agent/workspace
 
     healthcheck:
-      # Checks the keepalive process, not specific tools – which tools exist
-      # is configurable via INSTALL_* (use `make health` for a tool overview).
-      test: ["CMD", "pgrep", "-u", "agent", "-f", "sleep infinity"]
+      # Verifies keepalive, the tmux session, AND that every AUTOSTART_* agent
+      # is still alive. Probing only keepalive would report healthy with zero
+      # agents running - which is the failure worth catching.
+      test: ["CMD", "/usr/local/bin/container-health"]
       interval: 1m
       timeout: 10s
       retries: 3
-      start_period: 30s
+      start_period: 60s
 
     logging:
       driver: json-file

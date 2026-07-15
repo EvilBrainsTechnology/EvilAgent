@@ -13,7 +13,7 @@ ships with all tools pre-installed:
 | **OpenClaw** | full-stack agent solution | `openclaw` |
 | **Agent2Telegram** | agent ↔ Telegram bridge | `agent2telegram` |
 | **AgentsMonitor** | monitoring + automatic recovery | `agentsmon` |
-| **Whisper** (OpenAI / faster-whisper) | voice control (Voice2Text) | `voice2text` |
+| **Whisper** (faster-whisper) | voice control (Voice2Text) | `voice2text` |
 
 ---
 
@@ -27,24 +27,50 @@ a misbehaving agent or a successful prompt-injection attack gains full control o
 the machine.
 
 **This project's approach: the container is the security boundary.**
-Agents inside can run unconstrained because they are enclosed in isolation:
+
+### What this actually protects you from
+
+The container contains **damage to the host**:
 
 - ✅ runs as **unprivileged user `agent`** (not root),
-- ✅ **`no-new-privileges`** + **all Linux capabilities dropped** (except the minimum needed) → cannot escalate to root inside; `sudo` is intentionally blocked,
-- ✅ **no Docker socket**, **no host network**, **no `privileged` mode** → agent cannot reach the host or other containers,
+- ✅ **`no-new-privileges`** + **all Linux capabilities dropped** (except the minimum the entrypoint needs) → agents hold no capabilities at all; `sudo` is intentionally blocked,
+- ✅ **no Docker socket**, **no host network**, **no `privileged` mode**, **no host bind-mounts** → agent cannot touch the host filesystem or control Docker,
 - ✅ **CPU / RAM / PID limits** → a runaway or fork-bombing agent cannot take down the machine,
-- ✅ **secrets (API keys, tokens) only in `.env`**, never in the image or git,
-- ✅ dedicated **bridge network** isolated from the host,
+- ✅ **no credentials in the image or in git** — tools log in interactively and store their credentials in volumes,
 - ✅ tool binaries in the image, data in separate **volumes** (easy to back up and audit).
 
-**What this means in practice:** agents can operate fully automated (24/7, via
-Telegram, with approval bypass), but the worst that can happen is damage to the
-container's contents — which you can rebuild at any time and restore from a backup.
+If an agent goes wrong, you rebuild the container and restore from backup. Your
+host stays intact.
 
-> **Additional recommendations:** run the container on a dedicated server/VM, give
-> agents tokens with minimal permissions (not your primary account), and mount
-> sensitive repositories read-only. Outbound network access can be further restricted
-> (see *Network hardening* below).
+### What it does NOT protect you from
+
+Be clear-eyed about this — the container boundary contains **host damage, not data**:
+
+- ❌ **Agents can read each other's credentials.** Every agent runs as the same
+  uid 1000 and shares one home directory, so any agent — running with approval
+  guards disabled — can read `~/.codex`, `~/.claude`, and the SSH keys in
+  `~/.ssh`. A successful prompt injection does not need to escape the container
+  to hurt you.
+- ❌ **Outbound network access is unrestricted by default.** The container can
+  reach the whole internet, your **LAN**, and any host service listening on
+  `0.0.0.0` (via the Docker gateway, typically `172.17.0.1`). Nothing stops an
+  agent from sending those credentials somewhere.
+- ❌ **The agents' own actions are not sandboxed.** That's the point — they run
+  with `--dangerously-*`. Everything inside the container is fair game to them.
+
+**In short: this is a good containment story for a compromised agent wrecking a
+machine, and no containment at all for a compromised agent stealing credentials.**
+Plan accordingly:
+
+- Give agents accounts with **minimal permissions** — never your primary account.
+  Assume any credential inside the container may leak.
+- Run the container on a **dedicated server/VM**, not on your workstation and not
+  on a network with sensitive internal services.
+- Restrict egress with a **proxy allowlist** — see *Network hardening* below.
+  This is the single highest-value hardening step and it is not enabled by default.
+- Keep API keys out of `.env` where you can. Interactive login stores credentials
+  in a volume, which at least keeps them out of the process environment and out
+  of `docker inspect`. It does not hide them from the agents themselves.
 
 ---
 
@@ -55,7 +81,7 @@ Prerequisites: **Docker** + **Docker Compose** on the host.
 ```bash
 # 1) Configuration
 cd src
-cp .env.example .env        # keys are optional – most tools authenticate interactively
+cp .env.example .env        # no keys needed – tools authenticate interactively
                             # INSTALL_* flags choose which tools to install (default: all)
 
 # 2) Build the image (downloads and installs all tools)
@@ -71,8 +97,9 @@ make shell                  # or: docker compose exec -u agent evilagent bash -l
 > All `make` and `docker compose` commands must be run from the `src/` directory.
 > From the project root use `make -C src <target>` or `cd src` once at the start of a session.
 
-After start the container simply keeps the tmux session `main` alive. You
-**configure and start agents manually** — see below.
+After start the container brings up the shared tmux session `main` and starts any
+agents you configured via `AUTOSTART_*` (see *Running agents 24/7*). With no
+autostart configured, you **configure and start agents manually** — see below.
 
 ### Choosing which tools to install
 
@@ -94,14 +121,16 @@ INSTALL_WHISPER=false
 The flags apply at image build time — after changing them, run
 `docker compose build && docker compose up -d` (or `make update`).
 `make health` shows which tools are present; disabled tools are listed
-as `disabled` instead of missing.
+as `disabled` rather than missing, so a deliberately-skipped tool never looks
+like a broken build.
 
 ---
 
 ## First-time tool setup (manual, after first start)
 
-Enter the container (`make shell`) and set up what you need. Credentials and
-config are saved to persistent volumes, so **you only need to do this once**.
+Enter the container (`make shell`) and set up what you need. **Each tool handles
+its own authentication** and saves credentials to a persistent volume, so
+**you only need to do this once** — there are no API keys to put in `.env`.
 
 ### Codex (meta-agent)
 ```bash
@@ -110,18 +139,18 @@ codex                      # interactive login (device flow / API key)
 tmux new -s master 'codex --dangerously-bypass-approvals-and-sandbox'
 #   detach: Ctrl+B then D        reattach: tmux attach -t master
 ```
-> `--dangerously-*` is safe here – the boundary is the container, not your machine.
-
-### Agent2Telegram (connect Codex to Telegram)
-```bash
-# add TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to .env (from @BotFather), then:
-agent2telegram connect
-```
+> `--dangerously-*` is safe for your **host** here – the boundary is the
+> container. It is not safe for your **credentials**; see the security model.
 
 ### Claude Code
 ```bash
-claude                     # login (subscription) or set ANTHROPIC_API_KEY in .env
+claude                     # interactive login (subscription or API key)
 claude --dangerously-skip-permissions
+```
+
+### Agent2Telegram (connect Codex to Telegram)
+```bash
+agent2telegram connect     # follow the prompts; create the bot with @BotFather
 ```
 
 ### Hermes Agent
@@ -147,8 +176,9 @@ agentsmon new              # create a new monitored agent
 ```bash
 agy --dangerously-skip-permissions
 ```
-> **Subscription does not work on servers.** Use a Google Cloud project or set
-> `GEMINI_API_KEY` in `.env`. Google Cloud offers $300 of free credit for 3 months.
+> **Subscription does not work on servers.** Log in with a Google Cloud project,
+> or add `GEMINI_API_KEY=...` to `.env` yourself if you want API mode.
+> Google Cloud offers $300 of free credit for 3 months.
 
 ### Voice control (Whisper)
 The container has no microphone. Copy audio into `~/workspace` and transcribe it:
@@ -156,8 +186,64 @@ The container has no microphone. Copy audio into `~/workspace` and transcribe it
 voice2text ~/workspace/recording.m4a small cs
 ```
 Then pass the text to an agent. Models are downloaded once to `~/.cache/whisper`.
-For best results with languages other than English, consider **ElevenLabs Scribe**
-via the API (`ELEVENLABS_API_KEY` in `.env`; also supports Text2Voice).
+For languages other than English, ElevenLabs Scribe via their API generally
+transcribes better than local Whisper models.
+
+---
+
+## Running agents 24/7
+
+Interactive setup is one-time, but a hand-started agent lives only as long as the
+container process does. A restart, a host reboot, or an OOM kill would otherwise
+bring the container back **healthy and empty** — with no agents running at all.
+
+Once a tool is configured, list it in `.env` and it starts with the container:
+
+```bash
+AUTOSTART_MASTER=codex --dangerously-bypass-approvals-and-sandbox
+AUTOSTART_CLAUDE=claude --dangerously-skip-permissions
+```
+
+Each `AUTOSTART_<NAME>` becomes a tmux window named `<name>` in the shared
+session `main`:
+
+```bash
+make attach            # attach to the session (Ctrl+B then W lists windows)
+                       # detach with Ctrl+B then D
+```
+
+Restart the container to apply changes: `docker compose up -d`.
+
+### Health and recovery
+
+The container healthcheck watches **exactly these agents**. If one exits, the
+window is kept (`remain-on-exit`) so you can read its last output, and the
+container is reported **unhealthy**:
+
+```bash
+docker compose ps                       # STATUS column shows (unhealthy)
+docker inspect --format '{{json .State.Health}}' evilagent | jq
+```
+
+Docker's `restart: unless-stopped` does not act on health status. For automatic
+recovery either configure **AgentsMonitor** (which is what it's for) or run a
+watchdog such as `willfarrell/autoheal` alongside the container.
+
+### Agent logs (audit trail)
+
+Every autostarted agent's output is captured to a log file — worth having, since
+these agents run with approvals disabled and you would otherwise have no record
+of what they did:
+
+```bash
+make agent-logs                                    # list logs
+make shell
+tail -f ~/.local/state/evilagent/logs/master.log   # follow one agent
+```
+
+Logs live in the `localstate` volume and are included in backups. They are **not
+rotated** — if you run agents continuously, add a `logrotate` entry or truncate
+them periodically.
 
 ---
 
@@ -171,6 +257,7 @@ image rebuilds**:
 | `codex`, `claude`, `hermes`, `openclaw`, `agent2telegram`, `agentsmon` | per-tool config and credentials |
 | `config` | XDG config, `gcloud` |
 | `cache` | downloaded Whisper models, etc. |
+| `localstate` | agent logs (`~/.local/state`) |
 | `ssh` | agent SSH keys |
 | `workspace` | working directory / repositories / agent data |
 
@@ -190,26 +277,40 @@ make update
 # = backup  →  docker compose build --pull  →  up -d  →  tool refresh inside container
 ```
 
+A failed backup **aborts** the update rather than rebuilding on a backup that
+didn't happen. Override deliberately with `FORCE=1 ./scripts/update.sh`.
+
 Manual equivalent:
 ```bash
 docker compose build --pull && docker compose up -d
 ```
 
 All tool sources are defined in [`src/scripts/install-tools.sh`](src/scripts/install-tools.sh) –
-update URLs and versions in one place. To refresh tools without a full rebuild:
+update URLs in one place. Tools install at their latest version; to refresh them
+without a full rebuild:
 ```bash
 make tools     # runs install-tools.sh inside the running container
 ```
+
+> `make tools` installs into the **running container**, not the image. Those
+> updates are lost the next time the container is recreated (`docker compose up -d`
+> after a build). Use it for a quick fix; use `make update` to make it stick.
 
 ---
 
 ## Backup and restore
 
 ```bash
-make backup                                      # -> backups/<date>/agent-data.tar.gz
-./src/scripts/restore.sh backups/2026.../agent-data.tar.gz
+make backup                                      # -> src/backups/<timestamp>/agent-data.tar.gz
+./src/scripts/restore.sh src/backups/2026.../agent-data.tar.gz
 ```
-Backs up all config, credentials, and `workspace` into a single archive.
+
+Backs up all config, credentials, agent logs, and `workspace` into a single
+archive. The backup **verifies the archive** and fails loudly if anything went
+wrong — it never reports success for an archive it couldn't read. `restore.sh`
+accepts both absolute and relative paths.
+
+> Backups are written to `src/backups/` and are gitignored.
 
 ---
 
@@ -222,21 +323,44 @@ Backs up all config, credentials, and `workspace` into a single archive.
 | `make root-shell` | shell as `root` (administration) |
 | `make attach` | attach to shared tmux session `main` |
 | `make logs` | follow container logs |
+| `make agent-logs` | list captured agent output logs |
 | `make health` | show tool availability |
 | `make tools` | reinstall / update tools |
 | `make update` | full update |
 | `make backup` | back up agent data |
+| `make lint` | run shellcheck + hadolint (same checks as CI) |
 
 ---
 
-## Network hardening (optional, advanced)
+## Network hardening (recommended, not default)
 
 Agents need outbound internet access for model APIs, so the network cannot be
-fully closed. To restrict outbound traffic to allowed domains, place an
-**egress proxy** (e.g. Squid with an allowlist) in front of the container and
-set `HTTP(S)_PROXY`. Full network isolation (`networks: internal: true`) is
-available as a commented-out option in `src/docker-compose.yml` — usable only for
-agents that do not need internet access.
+fully closed — but leaving it wide open means any agent can exfiltrate every
+credential it can read, which is all of them. This is the most valuable hardening
+step available.
+
+Place an **egress proxy** (e.g. Squid with a domain allowlist) in front of the
+container and point the agents at it via `HTTP_PROXY` / `HTTPS_PROXY` in `.env`.
+An allowlist of just your model API endpoints (`api.openai.com`,
+`api.anthropic.com`, …) removes most of the exfiltration surface.
+
+Full network isolation (`networks: internal: true`) is available as a
+commented-out option in [`src/docker-compose.yml`](src/docker-compose.yml) — usable
+only for agents that do not need internet access.
+
+---
+
+## Development
+
+```bash
+make lint          # shellcheck + hadolint + compose validation
+```
+
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs the same linters, builds
+the image with the reliable tools only, and smoke-tests that the container boots,
+that `evilagent-health` respects the `INSTALL_*` flags, that an autostarted agent
+runs, that the healthcheck goes red when that agent dies, and that a backup
+produces a verifiable archive.
 
 ---
 
@@ -244,16 +368,24 @@ agents that do not need internet access.
 
 - **Tool shows `MISS` after build.** The installers for Agent2Telegram, Hermes,
   OpenClaw, AgentsMonitor, and Antigravity come from the webinar and their URLs
-  may differ or be temporarily unavailable. The build **intentionally lets them
-  fail silently** so other tools still install. Verify/update the URLs in
+  may differ or be temporarily unavailable. Those are best-effort, so the build
+  continues without them. Verify/update the URLs in
   [`src/scripts/install-tools.sh`](src/scripts/install-tools.sh) and run `make tools`.
-  Codex and Claude Code install via npm and should always be available.
+  Codex and Claude Code install via npm and are **required** — if one of them
+  fails, the build fails rather than handing you an image without it.
+- **Container is `unhealthy`.** An autostarted agent exited. Find out which:
+  `docker inspect --format '{{json .State.Health}}' evilagent | jq`, then read its
+  last output — the dead tmux window is kept on purpose (`make attach`, `Ctrl+B` `W`)
+  and its log is in `~/.local/state/evilagent/logs/`.
 - **`sudo` doesn't work inside the container.** Correct — it is intentionally
   blocked by `no-new-privileges`. Use `make root-shell` for administration, or
   add permanent changes to `src/Dockerfile` and rebuild.
 - **Agent can't access a file from the host.** The container has no host
   bind-mounts (by design, for security). Copy files into the `workspace` volume:
   `docker compose cp myfile evilagent:/home/agent/workspace/`.
+- **First start is slow.** The entrypoint takes ownership of freshly created
+  volumes. It only does this for volumes whose ownership is actually wrong, so
+  this cost is paid once per volume, not on every start.
 
 ---
 
@@ -262,18 +394,30 @@ agents that do not need internet access.
 ```
 .
 ├── README.md
+├── LICENSE
 ├── .gitignore
 ├── .gitattributes
+├── .github/
+│   └── workflows/
+│       └── ci.yml                # lint + build + smoke test
 └── src/
-    ├── Dockerfile                 # image: Ubuntu + Node + Python + tools
-    ├── docker-compose.yml         # service, security, volumes, limits
-    ├── .env.example               # secrets/config template
-    ├── Makefile                   # shortcuts
+    ├── Dockerfile                # image: Ubuntu + Node + Python + tools
+    ├── docker-compose.yml        # service, security, volumes, limits
+    ├── .env.example              # configuration template
+    ├── Makefile                  # shortcuts
     └── scripts/
-        ├── install-tools.sh       # install/update CLI tools (build-time and runtime)
-        ├── entrypoint.sh          # volume init + drop to agent user
-        ├── voice2text.sh          # Whisper audio -> text transcription
-        ├── update.sh              # backup + rebuild + refresh
-        ├── backup.sh              # back up agent data
-        └── restore.sh             # restore from backup
+        ├── install-tools.sh      # install/update CLI tools
+        ├── entrypoint.sh         # volume init + autostart agents + drop to agent user
+        ├── health.sh             # tool inventory (`make health`)
+        ├── container-health.sh   # Docker healthcheck probe
+        ├── voice2text.sh         # Whisper audio -> text transcription
+        ├── update.sh             # backup + rebuild + refresh
+        ├── backup.sh             # back up agent data
+        └── restore.sh            # restore from backup
 ```
+
+---
+
+## License
+
+[MIT](LICENSE).

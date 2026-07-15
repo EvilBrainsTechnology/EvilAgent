@@ -6,7 +6,11 @@
 #   The container IS the sandbox. Agents inside run with approval guards
 #   disabled (--dangerously-*) but are isolated from the host: unprivileged
 #   user, dropped capabilities, no-new-privileges, no Docker socket access,
-#   CPU/RAM/PID limits. See README.md for details.
+#   CPU/RAM/PID limits.
+#
+#   This contains HOST DAMAGE. It does not contain DATA: agents share a home
+#   directory, can read each other's credentials, and have unrestricted
+#   outbound network access. See the security section in README.md.
 #
 #   Tool binaries live in the IMAGE (update = rebuild).
 #   Agent config and data live in VOLUMES (survive restart and rebuild).
@@ -17,6 +21,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
     TZ=Europe/Prague
+
+# pipefail matters here: without it a piped `curl ... | bash` that 404s still
+# reports success, and the build silently produces an image missing the tool.
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # --- System dependencies -----------------------------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -38,11 +46,11 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && rm -rf /var/lib/apt/lists/*
 
 # --- 'agent' user (uid 1000). Ubuntu 24.04 ships with uid 1000; remove it. --
-ARG AGENT_UID=1000
-ARG AGENT_GID=1000
+# The uid is fixed: there are no host bind-mounts to match ownership with, and
+# the entrypoint takes ownership of the named volumes on first use.
 RUN userdel -r ubuntu 2>/dev/null || true; \
-    groupadd -g ${AGENT_GID} agent 2>/dev/null || true; \
-    useradd -m -u ${AGENT_UID} -g ${AGENT_GID} -s /bin/bash agent
+    groupadd -g 1000 agent 2>/dev/null || true; \
+    useradd -m -u 1000 -g 1000 -s /bin/bash agent
 
 # --- Tool selection (configured via .env -> build args) ----------------------
 ARG INSTALL_CODEX=true
@@ -53,18 +61,14 @@ ARG INSTALL_OPENCLAW=true
 ARG INSTALL_AGENTSMONITOR=true
 ARG INSTALL_ANTIGRAVITY=true
 ARG INSTALL_WHISPER=true
-ARG INSTALL_OPENAI_WHISPER=false
 
 # --- Whisper (voice control) in an isolated venv -----------------------------
-# Default: lightweight faster-whisper (CPU, int8).
-# Full openai-whisper (torch, ~2 GB) is opt-in via INSTALL_OPENAI_WHISPER=true.
+# faster-whisper: CPU, int8, no torch. Good enough for transcription and a
+# fraction of the size of openai-whisper.
 RUN if [ "$INSTALL_WHISPER" = "true" ]; then \
         python3 -m venv /opt/whisper-venv \
      && /opt/whisper-venv/bin/pip install --no-cache-dir -U pip \
-     && /opt/whisper-venv/bin/pip install --no-cache-dir faster-whisper \
-     && if [ "$INSTALL_OPENAI_WHISPER" = "true" ]; then \
-            /opt/whisper-venv/bin/pip install --no-cache-dir openai-whisper; \
-        fi; \
+     && /opt/whisper-venv/bin/pip install --no-cache-dir faster-whisper; \
     fi
 
 # --- Route tool config dirs to persistent locations -------------------------
@@ -74,8 +78,20 @@ ENV PATH="/home/agent/.local/bin:${PATH}" \
     CLOUDSDK_CONFIG=/home/agent/.config/gcloud \
     NPM_CONFIG_UPDATE_NOTIFIER=false
 
-# --- Install agent CLIs (runs at build time; each step is best-effort) ------
+# --- Helper scripts (health.sh is used by install-tools.sh, so copy it first) -
+COPY scripts/health.sh /usr/local/bin/evilagent-health
+COPY scripts/container-health.sh /usr/local/bin/container-health
+COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY scripts/voice2text.sh /usr/local/bin/voice2text
+RUN chmod +x /usr/local/bin/evilagent-health /usr/local/bin/container-health \
+             /usr/local/bin/entrypoint.sh /usr/local/bin/voice2text
+
+# --- Install agent CLIs (runs at build time) ---------------------------------
 # INSTALL_* build args control which tools are installed (see .env.example).
+# Exit code is decided by install-tools.sh: Codex/Claude Code are required, the
+# third-party installers are best-effort. No blanket `|| true` here - that would
+# let a build in which every single tool failed still produce a usable-looking
+# image.
 COPY scripts/install-tools.sh /usr/local/lib/evilagent/install-tools.sh
 RUN chmod +x /usr/local/lib/evilagent/install-tools.sh \
  && INSTALL_CODEX="$INSTALL_CODEX" \
@@ -85,12 +101,8 @@ RUN chmod +x /usr/local/lib/evilagent/install-tools.sh \
     INSTALL_OPENCLAW="$INSTALL_OPENCLAW" \
     INSTALL_AGENTSMONITOR="$INSTALL_AGENTSMONITOR" \
     INSTALL_ANTIGRAVITY="$INSTALL_ANTIGRAVITY" \
-    /usr/local/lib/evilagent/install-tools.sh || true
-
-# --- Helper scripts ----------------------------------------------------------
-COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
-COPY scripts/voice2text.sh /usr/local/bin/voice2text
-RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/voice2text
+    INSTALL_WHISPER="$INSTALL_WHISPER" \
+    /usr/local/lib/evilagent/install-tools.sh
 
 # Environment for login shells (docker compose exec, tmux sessions)
 RUN printf '%s\n' \

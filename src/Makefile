@@ -1,9 +1,10 @@
 # EvilAgent – shortcuts for common operations
 .DEFAULT_GOAL := help
 COMPOSE := docker compose
+SERVICE := evilagent
 
 .PHONY: help build up down restart logs ps shell root-shell attach \
-        tools update backup restore health
+        tools update backup restore health agent-logs lint
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -24,26 +25,35 @@ restart: ## Restart the container
 logs: ## Follow container logs
 	$(COMPOSE) logs -f
 
+agent-logs: ## List captured agent output logs (audit trail)
+	$(COMPOSE) exec -u agent $(SERVICE) \
+	  bash -lc 'ls -lh ~/.local/state/evilagent/logs/ 2>/dev/null || echo "no agent logs yet"'
+
 ps: ## Show container status
 	$(COMPOSE) ps
 
 shell: ## Interactive shell as user 'agent'
-	$(COMPOSE) exec -u agent evilagent bash -l
+	$(COMPOSE) exec -u agent $(SERVICE) bash -l
 
 root-shell: ## Shell as root (system administration, apt, ...)
-	$(COMPOSE) exec -u root evilagent bash -l
+	$(COMPOSE) exec -u root $(SERVICE) bash -l
 
 attach: ## Attach to the shared tmux session 'main'
-	$(COMPOSE) exec -u agent evilagent tmux attach -t main
+	$(COMPOSE) exec -u agent $(SERVICE) tmux attach -t main
 
 tools: ## Reinstall / update all agent CLI tools
-	$(COMPOSE) exec -u root evilagent /usr/local/lib/evilagent/install-tools.sh
+	$(COMPOSE) exec -u root $(SERVICE) /usr/local/lib/evilagent/install-tools.sh
 
 update: ## Full update (rebuild + tool refresh), data is preserved
 	./scripts/update.sh
 
-backup: ## Back up agent data to backups/
+backup: ## Back up agent data to src/backups/
 	./scripts/backup.sh
 
-health: ## Check which tools are installed
-	$(COMPOSE) exec -u agent evilagent bash -lc 'for t in codex claude agy hermes openclaw agent2telegram agentsmon; do command -v $$t >/dev/null && echo "OK   $$t" || echo "MISS $$t"; done'
+health: ## Check which tools are installed (respects INSTALL_* flags)
+	$(COMPOSE) exec -u agent $(SERVICE) /usr/local/bin/evilagent-health
+
+lint: ## Run shellcheck + hadolint locally (same checks as CI)
+	shellcheck scripts/*.sh
+	hadolint Dockerfile
+	$(COMPOSE) config -q
