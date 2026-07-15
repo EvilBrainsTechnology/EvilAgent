@@ -1,0 +1,102 @@
+##############################################################################
+# EvilAgent – docker-compose
+#
+# Aktualizace:  docker compose build --pull && docker compose up -d
+#               (data ve volumes zůstanou zachována)
+# Konfigurace:  po prvním startu ručně, viz README.md
+##############################################################################
+services:
+  evilagent:
+    build:
+      context: .
+      args:
+        AGENT_UID: "${AGENT_UID:-1000}"
+        AGENT_GID: "${AGENT_GID:-1000}"
+        INSTALL_OPENAI_WHISPER: "${INSTALL_OPENAI_WHISPER:-false}"
+    image: evilagent:latest
+    container_name: evilagent
+    hostname: evilagent
+    restart: unless-stopped
+    init: false                       # PID 1 řeší tini z image
+    stop_grace_period: 30s
+
+    # Tajemství (API klíče, tokeny) se předávají přes .env – NIKDY v image.
+    env_file:
+      - .env
+
+    # ----------------------------- BEZPEČNOST --------------------------------
+    security_opt:
+      - no-new-privileges:true        # proces nemůže eskalovat práva (blokuje setuid/sudo)
+    cap_drop:
+      - ALL                           # zahoď všechny Linux capabilities...
+    cap_add:                          # ...a vrať jen minimum pro entrypoint
+      - CHOWN
+      - FOWNER
+      - SETUID                        # runuser: shození práv root -> agent
+      - SETGID
+    pids_limit: 4096                  # ochrana proti fork-bombě zběsilého agenta
+    mem_limit: "${MEM_LIMIT:-6g}"
+    memswap_limit: "${MEM_LIMIT:-6g}"
+    cpus: "${CPUS:-4}"
+    ulimits:
+      nofile:
+        soft: 8192
+        hard: 16384
+    tmpfs:
+      - /tmp:size=1g,mode=1777
+    # ZÁMĚRNĚ ZDE NENÍ:
+    #   - mount /var/run/docker.sock  (agent by ovládl celý Docker = útěk z sandboxu)
+    #   - network_mode: host          (agent by viděl síť hostitele)
+    #   - privileged: true            (nikdy)
+    #   - bind-mount citlivých cest z hostitele
+
+    networks:
+      - agentnet
+
+    # -------------------------- TRVALÁ DATA (volumes) ------------------------
+    # Přežijí restart i rebuild image. Binárky nástrojů jsou v image, tady
+    # jsou jen konfigurace, přihlášení a pracovní data agentů.
+    volumes:
+      - codex:/home/agent/.codex
+      - claude:/home/agent/.claude
+      - config:/home/agent/.config
+      - cache:/home/agent/.cache
+      - localstate:/home/agent/.local/state
+      - hermes:/home/agent/.hermes
+      - openclaw:/home/agent/.openclaw
+      - agent2telegram:/home/agent/.agent2telegram
+      - agentsmon:/home/agent/.agentsmon
+      - ssh:/home/agent/.ssh
+      - workspace:/home/agent/workspace
+
+    healthcheck:
+      test: ["CMD", "bash", "-lc", "command -v codex >/dev/null && command -v claude >/dev/null"]
+      interval: 1m
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+networks:
+  agentnet:
+    driver: bridge
+    # Volitelně: interní síť bez odchozího přístupu k jiným kontejnerům.
+    # internal: true  # POZOR: agenti pak nemají přístup k internetu/API.
+
+volumes:
+  codex:
+  claude:
+  config:
+  cache:
+  localstate:
+  hermes:
+  openclaw:
+  agent2telegram:
+  agentsmon:
+  ssh:
+  workspace:

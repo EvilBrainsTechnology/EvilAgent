@@ -1,0 +1,12 @@
+# Tajemství a lokální konfigurace
+.env
+.env.*
+!.env.example
+
+# Zálohy
+backups/
+*.tar.gz
+
+# Systémové
+.DS_Store
+Thumbs.db

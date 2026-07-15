@@ -1,0 +1,8 @@
+# Konce řádků LF jsou povinné pro soubory používané uvnitř Linux kontejneru.
+# Jinak by CRLF rozbil shebang skriptů (bad interpreter: /usr/bin/env^M).
+*.sh            text eol=lf
+Dockerfile      text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+Makefile        text eol=lf
+.env.example    text eol=lf
