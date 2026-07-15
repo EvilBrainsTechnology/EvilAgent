@@ -3,8 +3,7 @@
 # Update EvilAgent. Data in volumes is left untouched.
 #   1) backup,
 #   2) rebuild image (new system packages + tools from install-tools.sh),
-#   3) restart,
-#   4) refresh tools inside the running container.
+#   3) restart with the new image.
 #
 # A failed backup ABORTS the update. Rebuilding on the strength of a backup
 # that silently did not happen is how you lose credentials you cannot re-issue.
@@ -13,7 +12,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-echo "==> 1/4 Backing up data"
+echo "==> 1/3 Backing up data"
 if ! ./scripts/backup.sh; then
   if [ "${FORCE:-0}" = "1" ]; then
     echo "   Backup FAILED - continuing anyway because FORCE=1." >&2
@@ -26,14 +25,10 @@ if ! ./scripts/backup.sh; then
   fi
 fi
 
-echo "==> 2/4 Rebuilding image (--pull = latest base + tools)"
+echo "==> 2/3 Rebuilding image (--pull = latest base + tools)"
 docker compose build --pull
 
-echo "==> 3/4 Restarting with new image (volumes preserved)"
+echo "==> 3/3 Restarting with new image (volumes preserved)"
 docker compose up -d
-
-echo "==> 4/4 Refreshing CLI tools inside the container"
-docker compose exec -u root evilagent \
-  /usr/local/lib/evilagent/install-tools.sh || echo "   (tool refresh reported problems - run 'make health')"
 
 echo "Done. Tool credentials remain intact."

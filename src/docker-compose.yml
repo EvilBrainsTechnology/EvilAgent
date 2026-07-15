@@ -98,7 +98,8 @@ services:
 networks:
   agentnet:
     driver: bridge
-    # Optional: internal network with no outbound access to other containers.
+    # Optional: internal network with no internet or host/LAN access.
+    # Containers attached to agentnet can still communicate with each other.
     # internal: true  # WARNING: agents will then have no internet/API access.
 
 volumes:

@@ -21,10 +21,11 @@ ARCHIVE_FILE=$(basename "$ARCHIVE_ARG")
 
 cd "$(dirname "$0")/.."
 
-CONTAINER="${CONTAINER_NAME:-evilagent}"
+SERVICE=evilagent
 
-if ! docker ps --format '{{.Names}}' | grep -qx "$CONTAINER"; then
-  echo "Container '$CONTAINER' is not running - start it with 'docker compose up -d'." >&2
+CONTAINER=$(docker compose ps -q "$SERVICE")
+if [ -z "$CONTAINER" ]; then
+  echo "Service '$SERVICE' is not running - start it with 'docker compose up -d'." >&2
   exit 1
 fi
 
@@ -33,16 +34,35 @@ if ! tar tzf "$ARCHIVE_DIR/$ARCHIVE_FILE" >/dev/null 2>&1; then
   echo "Archive is corrupt or unreadable: $ARCHIVE_DIR/$ARCHIVE_FILE" >&2
   exit 1
 fi
+if tar tzf "$ARCHIVE_DIR/$ARCHIVE_FILE" \
+  | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
+  echo "Archive contains an unsafe path: $ARCHIVE_DIR/$ARCHIVE_FILE" >&2
+  exit 1
+fi
 
-echo "WARNING: this will overwrite current data in container $CONTAINER with"
+echo "WARNING: this will stop $SERVICE and overwrite its current data with"
 echo "         $ARCHIVE_DIR/$ARCHIVE_FILE"
 read -r -p "Continue? [yes/NO] " ans
 [ "$ans" = "yes" ] || { echo "Aborted."; exit 0; }
 
-docker run --rm \
-  --volumes-from "$CONTAINER" \
-  -v "$ARCHIVE_DIR:/backup:ro" \
-  alpine sh -c "set -eu; cd /home/agent && tar xzf '/backup/$ARCHIVE_FILE'"
+docker compose stop "$SERVICE" >/dev/null
 
-echo "Restored. Restarting container to apply correct ownership."
-docker compose restart
+MSYS_NO_PATHCONV=1 docker run --rm \
+  --entrypoint bash \
+  --volumes-from "$CONTAINER" \
+  --mount "type=bind,source=$ARCHIVE_DIR,target=/backup,readonly" \
+  evilagent:latest -c '
+    set -eu
+    archive="$1"
+    if tar tzf "$archive" | grep -q "^crontabs/"; then
+      tar --numeric-owner -xzf "$archive" -C /home/agent --exclude=crontabs
+      tar --numeric-owner -xzf "$archive" -C /var/spool/cron crontabs
+    else
+      # Backwards compatibility with archives created before crontabs were
+      # included: every entry in those archives belongs under /home/agent.
+      tar --numeric-owner -xzf "$archive" -C /home/agent
+    fi
+  ' _ "/backup/$ARCHIVE_FILE"
+
+echo "Restored. Starting service to apply correct ownership."
+docker compose start "$SERVICE" >/dev/null

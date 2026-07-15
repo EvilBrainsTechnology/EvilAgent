@@ -2,8 +2,9 @@
 ##############################################################################
 # evilagent-health – tool inventory.
 #
-# Prints which agent CLIs are present. Used by `make health` and by the
-# summary at the end of install-tools.sh.
+# Checks that each enabled agent CLI can actually start. Used by `make health`
+# and by the summary at the end of install-tools.sh. Exits non-zero when an
+# enabled tool is missing or broken.
 #
 # INSTALL_* env vars are baked into the image at build time (Dockerfile ARG
 # -> ENV), so a tool excluded via --build-arg shows as "disabled" rather
@@ -11,7 +12,7 @@
 ##############################################################################
 set -uo pipefail
 
-PATH="/home/agent/.local/bin:$PATH"
+PATH="/home/agent/.local/bin:/home/agent/.npm-global/bin:$PATH"
 export PATH
 
 # Is the tool enabled? Anything other than "false" (including unset) = enabled.
@@ -33,16 +34,23 @@ TOOL_ORDER=(codex claude agy hermes openclaw agent2telegram agentsmon)
 
 ok()       { printf '  \033[1;32m OK  \033[0m %s\n' "$1"; }
 missing()  { printf '  \033[1;31mMISS \033[0m %s\n' "$1"; }
+broken()   { printf '  \033[1;31mFAIL \033[0m %s (command does not run)\n' "$1"; }
 disabled() { printf '  \033[1;90m  -  \033[0m %s (disabled)\n' "$1"; }
+
+failures=0
 
 for tool in "${TOOL_ORDER[@]}"; do
   flag="${TOOL_FLAGS[$tool]}"
-  if command -v "$tool" >/dev/null 2>&1; then
-    ok "$tool"
-  elif ! enabled "$flag"; then
+  if ! enabled "$flag"; then
     disabled "$tool"
-  else
+  elif ! command -v "$tool" >/dev/null 2>&1; then
     missing "$tool"
+    failures=$((failures + 1))
+  elif timeout 15 "$tool" --version >/dev/null 2>&1; then
+    ok "$tool"
+  else
+    broken "$tool"
+    failures=$((failures + 1))
   fi
 done
 
@@ -55,4 +63,7 @@ elif ! enabled WHISPER; then
   disabled "whisper (voice2text)"
 else
   missing "whisper (voice2text)"
+  failures=$((failures + 1))
 fi
+
+exit "$failures"

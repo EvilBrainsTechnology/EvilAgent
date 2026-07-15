@@ -35,17 +35,17 @@ enabled() {
 }
 
 # Run a command as user 'agent' with the correct HOME/PATH.
-# Tools that install to ~/.local/bin stay in the agent's home directory.
+# Tools install to either ~/.local/bin or ~/.npm-global/bin.
 as_agent() {
   runuser -u agent -- env \
     HOME=/home/agent \
-    PATH="/home/agent/.local/bin:/usr/local/bin:/usr/bin:/bin" \
+    PATH="/home/agent/.local/bin:/home/agent/.npm-global/bin:/usr/local/bin:/usr/bin:/bin" \
     CODEX_HOME=/home/agent/.codex \
     CLAUDE_CONFIG_DIR=/home/agent/.claude \
     bash -lc "$1"
 }
 
-have() { as_agent "command -v $1 >/dev/null 2>&1"; }
+works() { as_agent "command -v $1 >/dev/null 2>&1 && timeout 15 $1 --version >/dev/null 2>&1"; }
 
 # Download an install script to a file, then run it. Piping curl straight into a
 # shell would execute a half-downloaded script if the connection drops midway.
@@ -77,9 +77,9 @@ fetch_and_run() {
 if enabled CODEX; then
   log "Codex CLI (@openai/codex)"
   npm install -g @openai/codex@latest || warn "npm @openai/codex failed"
-  have codex || fetch_and_run "Codex" "https://chatgpt.com/codex/install.sh" sh \
+  works codex || fetch_and_run "Codex" "https://chatgpt.com/codex/install.sh" sh \
     || warn "Codex could not be installed"
-  have codex || REQUIRED_MISSING+=("codex")
+  works codex || REQUIRED_MISSING+=("codex")
 else
   skip "Codex" INSTALL_CODEX
 fi
@@ -88,9 +88,19 @@ fi
 if enabled CLAUDE_CODE; then
   log "Claude Code (@anthropic-ai/claude-code)"
   npm install -g @anthropic-ai/claude-code@latest || warn "npm @anthropic-ai/claude-code failed"
-  have claude || fetch_and_run "Claude Code" "https://claude.ai/install.sh" bash \
+
+  # Recent npm releases ship a small launcher plus a platform-native binary.
+  # If npm downloaded both but skipped the postinstall, finish that step here.
+  if ! works claude; then
+    CLAUDE_POSTINSTALL="$(npm root -g)/@anthropic-ai/claude-code/install.cjs"
+    if [ -f "$CLAUDE_POSTINSTALL" ]; then
+      node "$CLAUDE_POSTINSTALL" || warn "Claude Code postinstall failed"
+    fi
+  fi
+
+  works claude || fetch_and_run "Claude Code" "https://claude.ai/install.sh" bash \
     || warn "Claude Code could not be installed"
-  have claude || REQUIRED_MISSING+=("claude")
+  works claude || REQUIRED_MISSING+=("claude")
 else
   skip "Claude Code" INSTALL_CLAUDE_CODE
 fi
@@ -147,7 +157,7 @@ fi
 # --- Summary -----------------------------------------------------------------
 # Shared with `make health` so the two can never disagree.
 log "Installed tools:"
-/usr/local/bin/evilagent-health
+/usr/local/bin/evilagent-health || true
 
 if [ ${#REQUIRED_MISSING[@]} -gt 0 ]; then
   echo

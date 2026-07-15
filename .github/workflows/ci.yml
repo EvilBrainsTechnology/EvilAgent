@@ -4,6 +4,9 @@ on:
   push:
     branches: [master]
   pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * 1"
 
 jobs:
   lint:
@@ -60,6 +63,21 @@ jobs:
             --build-arg INSTALL_ANTIGRAVITY=false \
             --build-arg INSTALL_WHISPER=false
 
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: evilagent:latest
+          artifact-name: evilagent-sbom.spdx.json
+
+      - name: Scan image for fixable high-severity vulnerabilities
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: evilagent:latest
+          format: table
+          exit-code: 1
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
+
   smoke:
     name: Smoke test (boot, health, cron)
     runs-on: ubuntu-latest
@@ -96,7 +114,7 @@ jobs:
       - name: Wait for healthy
         working-directory: ./src
         run: |
-          for i in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             status=$(docker inspect --format '{{.State.Health.Status}}' evilagent 2>/dev/null || echo starting)
             echo "health: $status"
             [ "$status" = "healthy" ] && exit 0
@@ -108,7 +126,7 @@ jobs:
           docker inspect --format '{{json .State.Health}}' evilagent || true
           exit 1
 
-      - name: Tool inventory reflects INSTALL_* flags
+      - name: Functional tool health reflects INSTALL_* flags
         working-directory: ./src
         run: |
           out=$(docker compose exec -T -u agent evilagent /usr/local/bin/evilagent-health)
@@ -132,7 +150,7 @@ jobs:
       - name: Cron actually executes the job
         working-directory: ./src
         run: |
-          for i in $(seq 1 15); do
+          for _ in $(seq 1 15); do
             if docker compose exec -T -u agent evilagent test -s /tmp/cron-proof.log; then
               echo "cron ran the job:"
               docker compose exec -T -u agent evilagent cat /tmp/cron-proof.log
@@ -172,9 +190,30 @@ jobs:
           ./scripts/backup.sh
           test -s backups/*/agent-data.tar.gz
           tar tzf backups/*/agent-data.tar.gz >/dev/null
+          tar tzf backups/*/agent-data.tar.gz | grep -q '^crontabs/agent$'
           echo "backup produced a verifiable archive"
 
       - name: Teardown
         if: always()
         working-directory: ./src
         run: docker compose down -v
+
+  full-tools:
+    name: Full tool installation
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      # Third-party installers can be temporarily unavailable, so this slower
+      # all-tool check runs weekly or on demand instead of on every commit.
+      - name: Build with every tool enabled
+        working-directory: ./src
+        run: |
+          cp .env.example .env
+          echo "CPUS=2" >> .env
+          docker compose build --pull
+
+      - name: Verify every installed command actually runs
+        run: docker run --rm --user 1000:1000 --entrypoint /usr/local/bin/evilagent-health evilagent:latest

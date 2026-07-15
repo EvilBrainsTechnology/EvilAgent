@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 ##############################################################################
-# Back up all persistent agent data into a single .tar.gz.
-# Reads data directly from the running container (--volumes-from), so it
-# works regardless of the volume names on the host.
+# Back up important persistent agent data into a single .tar.gz.
+# Briefly stops the service and reads its volumes directly (--volumes-from),
+# so the archive is consistent and works regardless of host volume names.
 #
 # A backup that fails is reported as a FAILURE and the incomplete archive is
 # removed. Never report success for an archive we could not verify - update.sh
@@ -13,12 +13,13 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-CONTAINER="${CONTAINER_NAME:-evilagent}"
+SERVICE=evilagent
 TS=$(date +%Y%m%d-%H%M%S)
 OUT="backups/$TS"
 
-if ! docker ps --format '{{.Names}}' | grep -qx "$CONTAINER"; then
-  echo "Container '$CONTAINER' is not running - start it with 'docker compose up -d'." >&2
+CONTAINER=$(docker compose ps -q "$SERVICE")
+if [ -z "$CONTAINER" ]; then
+  echo "Service '$SERVICE' is not running - start it with 'docker compose up -d'." >&2
   exit 1
 fi
 
@@ -28,15 +29,25 @@ ARCHIVE="$OUT/agent-data.tar.gz"
 # Paths are relative to /home/agent. Missing ones are tolerated (a tool may be
 # disabled via INSTALL_*), but any other tar error fails the backup.
 PATHS=(
-  .codex .claude .config .cache .local/state
+  .codex .claude .config .local/state
   .hermes .openclaw .agent2telegram .agentsmon .ssh workspace
 )
 
-echo "Backing up data from container $CONTAINER ..."
-if ! docker run --rm \
+restart_service() {
+  echo "Restarting service $SERVICE ..."
+  docker compose start "$SERVICE" >/dev/null
+}
+
+echo "Stopping service $SERVICE for a consistent backup ..."
+docker compose stop "$SERVICE" >/dev/null
+trap restart_service EXIT
+
+echo "Backing up persistent data ..."
+if ! MSYS_NO_PATHCONV=1 docker run --rm \
+      --entrypoint bash \
       --volumes-from "$CONTAINER" \
-      -v "$(pwd)/$OUT:/backup" \
-      alpine sh -c '
+      --mount "type=bind,source=$(pwd)/$OUT,target=/backup" \
+      evilagent:latest -c '
         set -eu
         cd /home/agent
         existing=""
@@ -45,7 +56,9 @@ if ! docker run --rm \
         done
         [ -n "$existing" ] || { echo "nothing to back up in /home/agent" >&2; exit 1; }
         # shellcheck disable=SC2086
-        tar czf /backup/agent-data.tar.gz $existing
+        tar --numeric-owner -czf /backup/agent-data.tar.gz \
+          -C /home/agent $existing \
+          -C /var/spool/cron crontabs
       ' _ "${PATHS[@]}"; then
   echo "BACKUP FAILED - removing incomplete archive." >&2
   rm -f "$ARCHIVE"
@@ -66,6 +79,9 @@ if [ "$ENTRIES" -eq 0 ]; then
   rm -f "$ARCHIVE"
   exit 1
 fi
+
+trap - EXIT
+restart_service
 
 echo "Done: $ARCHIVE ($ENTRIES entries)"
 ls -lh "$ARCHIVE"

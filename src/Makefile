@@ -40,16 +40,16 @@ root-shell: ## Shell as root (system administration, apt, ...)
 attach: ## Attach to the shared tmux session 'main'
 	$(COMPOSE) exec -u agent $(SERVICE) tmux attach -t main
 
-tools: ## Reinstall / update all agent CLI tools
+tools: ## Temporarily reinstall tools in the running container
 	$(COMPOSE) exec -u root $(SERVICE) /usr/local/lib/evilagent/install-tools.sh
 
-update: ## Full update (rebuild + tool refresh), data is preserved
+update: ## Full update (backup + rebuild), data is preserved
 	./scripts/update.sh
 
 backup: ## Back up agent data to src/backups/
 	./scripts/backup.sh
 
-health: ## Check which tools are installed (respects INSTALL_* flags)
+health: ## Verify enabled tools run (respects INSTALL_* flags)
 	$(COMPOSE) exec -u agent $(SERVICE) /usr/local/bin/evilagent-health
 
 lint: ## Run shellcheck + hadolint locally (same checks as CI)

@@ -2,7 +2,8 @@
 
 Docker runtime environment for a **multi-agent system** based on the webinar
 by Petr Ludwig: *"AI Agents as the Future of Work"*. A single isolated container
-ships with all tools pre-installed:
+installs the following tools. Codex and Claude Code are required; installers for
+the other webinar tools are best-effort and `make health` reports any failure:
 
 | Tool | Role | Command |
 |---|---|---|
@@ -35,12 +36,14 @@ The container contains **damage to the host**:
 - ✅ runs as **unprivileged user `agent`** (not root),
 - ✅ **`no-new-privileges`** + **all Linux capabilities dropped** (except the minimum the entrypoint needs) → agents hold no capabilities at all; `sudo` is intentionally blocked,
 - ✅ **no Docker socket**, **no host network**, **no `privileged` mode**, **no host bind-mounts** → agent cannot touch the host filesystem or control Docker,
-- ✅ **CPU / RAM / PID limits** → a runaway or fork-bombing agent cannot take down the machine,
+- ✅ **CPU / RAM / PID limits** → common runaway-process and fork-bomb damage is bounded; persistent volumes still have no disk quota,
 - ✅ **no credentials in the image or in git** — tools log in interactively and store their credentials in volumes,
 - ✅ tool binaries in the image, data in separate **volumes** (easy to back up and audit).
 
-If an agent goes wrong, you rebuild the container and restore from backup. Your
-host stays intact.
+If an agent is compromised, stop the container, rotate every credential it could
+read, rebuild the image, and restore only known-good data. A rebuild alone is not
+an incident-recovery procedure because workspace files, configuration, and cron
+jobs intentionally survive in volumes.
 
 ### What it does NOT protect you from
 
@@ -66,8 +69,9 @@ Plan accordingly:
   Assume any credential inside the container may leak.
 - Run the container on a **dedicated server/VM**, not on your workstation and not
   on a network with sensitive internal services.
-- Restrict egress with a **proxy allowlist** — see *Network hardening* below.
-  This is the single highest-value hardening step and it is not enabled by default.
+- A proxy can reduce accidental outbound access for tools that honor proxy
+  settings, but it is not enforced against a malicious agent. See *Network
+  hardening* below.
 - Keep API keys out of `.env` where you can. Interactive login stores credentials
   in a volume, which at least keeps them out of the process environment and out
   of `docker inspect`. It does not hide them from the agents themselves.
@@ -82,7 +86,7 @@ Prerequisites: **Docker** + **Docker Compose** on the host.
 # 1) Configuration
 cd src
 cp .env.example .env        # no keys needed – tools authenticate interactively
-                            # INSTALL_* flags choose which tools to install (default: all)
+                            # INSTALL_* build args choose tools (default: all)
 
 # 2) Build the image (downloads and installs all tools)
 docker compose build        # or: make build
@@ -113,7 +117,8 @@ Available flags: `INSTALL_CODEX`, `INSTALL_CLAUDE_CODE`, `INSTALL_AGENT2TELEGRAM
 `INSTALL_HERMES`, `INSTALL_OPENCLAW`, `INSTALL_AGENTSMONITOR`, `INSTALL_ANTIGRAVITY`,
 `INSTALL_WHISPER`.
 
-`make health` shows which tools are present in the running container.
+`make health` starts each CLI with `--version`; it exits non-zero when an enabled
+tool is missing or broken.
 
 ---
 
@@ -255,8 +260,9 @@ image rebuilds**:
 
 | Volume | Contents |
 |---|---|
-| `codex`, `claude`, `hermes`, `openclaw`, `agent2telegram`, `agentsmon` | per-tool config and credentials |
-| `config` | XDG config, `gcloud` |
+| `codex`, `claude`, `hermes`, `openclaw` | per-tool config and credentials |
+| `agent2telegram`, `agentsmon` | compatibility directories for tool-specific data |
+| `config` | XDG config, including Agent2Telegram, AgentsMonitor, and `gcloud` |
 | `cache` | downloaded Whisper models, etc. |
 | `localstate` | AgentsMonitor state, uptime DB, its log (`~/.local/state`) |
 | `crontabs` | cron jobs (`agentsmon service`) — lives outside `$HOME` |
@@ -276,7 +282,7 @@ Tools and the OS are updated by **rebuilding the image**; volume data is preserv
 
 ```bash
 make update
-# = backup  →  docker compose build --pull  →  up -d  →  tool refresh inside container
+# = backup  →  docker compose build --pull  →  up -d
 ```
 
 A failed backup **aborts** the update rather than rebuilding on a backup that
@@ -294,9 +300,9 @@ without a full rebuild:
 make tools     # runs install-tools.sh inside the running container
 ```
 
-> `make tools` installs into the **running container**, not the image. Those
-> updates are lost the next time the container is recreated (`docker compose up -d`
-> after a build). Use it for a quick fix; use `make update` to make it stick.
+> `make tools` is a temporary repair command: it installs into the **running
+> container**, so its changes are lost when the container is recreated. Prefer
+> `make update`, which puts the tools in the image.
 
 ---
 
@@ -307,12 +313,15 @@ make backup                                      # -> src/backups/<timestamp>/ag
 ./src/scripts/restore.sh src/backups/2026.../agent-data.tar.gz
 ```
 
-Backs up all config, credentials, agent logs, and `workspace` into a single
-archive. The backup **verifies the archive** and fails loudly if anything went
-wrong — it never reports success for an archive it couldn't read. `restore.sh`
-accepts both absolute and relative paths.
+The service is briefly stopped so the archive is consistent. The backup includes
+config, credentials, agent logs, `workspace`, and the persistent crontab, then
+verifies that the archive is readable and non-empty. Re-downloadable cache data
+is excluded. `restore.sh` accepts both absolute and relative paths and also
+restores older archives that did not contain the crontab.
 
-> Backups are written to `src/backups/` and are gitignored.
+> Backups are written to `src/backups/` and are gitignored. They contain
+> plaintext credentials: restrict access to them or encrypt them before copying
+> them elsewhere.
 
 ---
 
@@ -334,17 +343,18 @@ accepts both absolute and relative paths.
 
 ---
 
-## Network hardening (recommended, not default)
+## Network hardening (optional, not enforced)
 
 Agents need outbound internet access for model APIs, so the network cannot be
 fully closed — but leaving it wide open means any agent can exfiltrate every
-credential it can read, which is all of them. This is the most valuable hardening
-step available.
+credential it can read, which is all of them. This project keeps networking
+simple and documents that risk rather than pretending to enforce an allowlist.
 
-Place an **egress proxy** (e.g. Squid with a domain allowlist) in front of the
-container and point the agents at it via `HTTP_PROXY` / `HTTPS_PROXY` in `.env`.
-An allowlist of just your model API endpoints (`api.openai.com`,
-`api.anthropic.com`, …) removes most of the exfiltration surface.
+You may point compatible tools at an egress proxy through `HTTP_PROXY` /
+`HTTPS_PROXY` in `.env`. This helps with normal traffic, but an autonomous agent
+can unset those variables or connect directly, so it is not a security boundary.
+Actual enforcement requires host/cloud firewall rules or a proxy-only network
+topology, which this deliberately simple project does not create for you.
 
 Full network isolation (`networks: internal: true`) is available as a
 commented-out option in [`src/docker-compose.yml`](src/docker-compose.yml) — usable
@@ -359,17 +369,17 @@ make lint          # shellcheck + hadolint + compose validation
 ```
 
 CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs the same linters, builds
-the image with the reliable tools only, and smoke-tests that the container boots,
-that `evilagent-health` respects the `INSTALL_*` flags, that the agent can install
-a crontab and cron executes it, that the crontab survives a container recreate,
-that the healthcheck goes red when cron dies, and that a backup produces a
-verifiable archive.
+the image with the reliable tools, verifies that their commands actually run,
+generates an SBOM, scans for fixable high-severity vulnerabilities, and tests
+container boot, cron persistence, health behavior, and complete backups. A weekly
+and manually triggered job builds and verifies every webinar tool without making
+ordinary commits depend on third-party installer availability.
 
 ---
 
 ## Troubleshooting
 
-- **Tool shows `MISS` after build.** The installers for Agent2Telegram, Hermes,
+- **Tool shows `MISS` or `FAIL` after build.** The installers for Agent2Telegram, Hermes,
   OpenClaw, AgentsMonitor, and Antigravity come from the webinar and their URLs
   may differ or be temporarily unavailable. Those are best-effort, so the build
   continues without them. Verify/update the URLs in
