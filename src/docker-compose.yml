@@ -57,7 +57,7 @@ services:
     #   - bind-mounts of sensitive host paths
 
     ports:
-      - "${AGENTSMON_PORT:-9876}:9876"
+      - "${AGENTSMON_PORT:-8765}:8765"
 
     networks:
       - agentnet
