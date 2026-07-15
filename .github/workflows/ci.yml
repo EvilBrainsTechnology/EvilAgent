@@ -68,7 +68,11 @@ jobs:
 
       - name: Prepare .env
         working-directory: ./src
-        run: cp .env.example .env
+        run: |
+          cp .env.example .env
+          # GitHub Actions runners have 2 CPUs; the compose default of 4 would
+          # be rejected by Docker with "range of CPUs is from 0.01 to 2.00".
+          echo "CPUS=2" >> .env
 
       - name: Build (core tools only)
         working-directory: ./src
