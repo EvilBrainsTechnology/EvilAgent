@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 ##############################################################################
-# Záloha všech trvalých dat agentů do jednoho .tar.gz.
-# Čte data přímo z běžícího kontejneru (--volumes-from), takže funguje
-# bez ohledu na názvy volumes.
+# Back up all persistent agent data into a single .tar.gz.
+# Reads data directly from the running container (--volumes-from), so it
+# works regardless of the volume names on the host.
 #
-# Obnova:  ./scripts/restore.sh backups/<časové_razítko>/agent-data.tar.gz
+# Restore:  ./scripts/restore.sh backups/<timestamp>/agent-data.tar.gz
 ##############################################################################
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -15,11 +15,11 @@ OUT="backups/$TS"
 mkdir -p "$OUT"
 
 if ! docker ps --format '{{.Names}}' | grep -qx "$CONTAINER"; then
-  echo "Kontejner '$CONTAINER' neběží – spusťte 'docker compose up -d'." >&2
+  echo "Container '$CONTAINER' is not running – start it with 'docker compose up -d'." >&2
   exit 1
 fi
 
-echo "Zálohuji data z kontejneru $CONTAINER ..."
+echo "Backing up data from container $CONTAINER ..."
 docker run --rm \
   --volumes-from "$CONTAINER" \
   -v "$(pwd)/$OUT:/backup" \
@@ -27,5 +27,5 @@ docker run --rm \
     .codex .claude .config .cache .local/state \
     .hermes .openclaw .agent2telegram .agentsmon .ssh workspace 2>/dev/null || true'
 
-echo "Hotovo: $OUT/agent-data.tar.gz"
+echo "Done: $OUT/agent-data.tar.gz"
 ls -lh "$OUT/agent-data.tar.gz"

@@ -1,97 +1,99 @@
-# EvilAgent 🤖
+# EvilAgent
 
-Docker prostředí pro běh **multiagentního systému** podle webináře Petra Ludwiga
-*„AI agenti jako budoucnost práce"*. V jednom izolovaném kontejneru jsou
-předinstalované nástroje:
+Docker runtime environment for a **multi-agent system** based on the webinar
+by Petr Ludwig: *"AI Agents as the Future of Work"*. A single isolated container
+ships with all tools pre-installed:
 
-| Nástroj | Role | Příkaz |
+| Tool | Role | Command |
 |---|---|---|
-| **Codex** (OpenAI) | meta-agent, správce ostatních | `codex` |
-| **Claude Code** (Anthropic) | vývoj / agent | `claude` |
-| **Google Antigravity** | agent (na serveru přes API) | `agy` |
+| **Codex** (OpenAI) | meta-agent, manages other agents | `codex` |
+| **Claude Code** (Anthropic) | development / agent | `claude` |
+| **Google Antigravity** | agent (API-only on servers) | `agy` |
 | **Hermes Agent** (Nous Research) | agent + gateway | `hermes` |
-| **OpenClaw** | ucelené agentní řešení | `openclaw` |
-| **Agent2Telegram** | most agent ↔ Telegram | `agent2telegram` |
-| **AgentsMonitor** | monitoring + automatická obnova | `agentsmon` |
-| **Whisper** (OpenAI / faster-whisper) | hlasové ovládání (Voice2Text) | `voice2text` |
+| **OpenClaw** | full-stack agent solution | `openclaw` |
+| **Agent2Telegram** | agent ↔ Telegram bridge | `agent2telegram` |
+| **AgentsMonitor** | monitoring + automatic recovery | `agentsmon` |
+| **Whisper** (OpenAI / faster-whisper) | voice control (Voice2Text) | `voice2text` |
 
 ---
 
-## 🔐 Bezpečnostní model – čtěte jako první
+## Security model – read this first
 
-Prezentace doporučuje spouštět agenty přímo na serveru s **vypnutými pojistkami**
-(`--dangerously-skip-permissions`, `--dangerously-bypass-approvals-and-sandbox`,
-`sudo NOPASSWD` na `reboot`/`dd`, hlavní agent se správou celého serveru napojený
-na Telegram). To je pohodlné, ale na běžném serveru **nebezpečné** – agent s chybou
-nebo pod vlivem prompt-injection má plnou kontrolu nad strojem.
+The webinar recommends running agents directly on a server with **all safety guards
+disabled** (`--dangerously-skip-permissions`, `--dangerously-bypass-approvals-and-sandbox`,
+`sudo NOPASSWD` on `reboot`/`dd`, and a master agent with full server control
+connected to Telegram). This is convenient, but **dangerous** on a bare server —
+a misbehaving agent or a successful prompt-injection attack gains full control over
+the machine.
 
-**Řešení tohoto projektu: kontejner je bezpečnostní hranice.**
-Agenti uvnitř běží klidně „nespoutaně", protože jsou zavření v izolaci:
+**This project's approach: the container is the security boundary.**
+Agents inside can run unconstrained because they are enclosed in isolation:
 
-- ✅ běží jako **neprivilegovaný uživatel `agent`** (ne root),
-- ✅ **`no-new-privileges`** + **zahozené všechny Linux capabilities** (kromě nutného minima) → uvnitř nejde eskalovat na root, `sudo` je záměrně zablokované,
-- ✅ **žádný přístup k Docker socketu**, **žádný host network**, **žádný `privileged`** → agent se nedostane na hostitele ani k ostatním kontejnerům,
-- ✅ **limity CPU / RAM / počtu procesů** → zběsilý nebo fork-bombující agent nepoloží stroj,
-- ✅ **tajemství (API klíče, tokeny) jen v `.env`**, nikdy ne v image ani v gitu,
-- ✅ vlastní **bridge síť** oddělená od hostitele,
-- ✅ binárky nástrojů jsou v image, data v oddělených **volumes** (snadná záloha i audit).
+- ✅ runs as **unprivileged user `agent`** (not root),
+- ✅ **`no-new-privileges`** + **all Linux capabilities dropped** (except the minimum needed) → cannot escalate to root inside; `sudo` is intentionally blocked,
+- ✅ **no Docker socket**, **no host network**, **no `privileged` mode** → agent cannot reach the host or other containers,
+- ✅ **CPU / RAM / PID limits** → a runaway or fork-bombing agent cannot take down the machine,
+- ✅ **secrets (API keys, tokens) only in `.env`**, never in the image or git,
+- ✅ dedicated **bridge network** isolated from the host,
+- ✅ tool binaries in the image, data in separate **volumes** (easy to back up and audit).
 
-**Co to znamená prakticky:** agenti mohou fungovat plně automatizovaně
-(24/7, přes Telegram, s bypassem schvalování), ale nejhorší, co se může stát,
-je poškození obsahu kontejneru – ten kdykoli přestavíte a data obnovíte ze zálohy.
+**What this means in practice:** agents can operate fully automated (24/7, via
+Telegram, with approval bypass), but the worst that can happen is damage to the
+container's contents — which you can rebuild at any time and restore from a backup.
 
-> **Doporučení navíc:** kontejner provozujte na samostatném serveru/VM, dávejte
-> agentům jen tokeny s minimem oprávnění (ne hlavní účet), a citlivé repozitáře
-> připojujte read-only. Odchozí síť lze dále omezit (viz *Zpřísnění sítě* níže).
+> **Additional recommendations:** run the container on a dedicated server/VM, give
+> agents tokens with minimal permissions (not your primary account), and mount
+> sensitive repositories read-only. Outbound network access can be further restricted
+> (see *Network hardening* below).
 
 ---
 
-## 🚀 Rychlý start
+## Quick start
 
-Předpoklady: **Docker** + **Docker Compose** na hostiteli.
+Prerequisites: **Docker** + **Docker Compose** on the host.
 
 ```bash
-# 1) Konfigurace
-cp .env.example .env        # klíče jsou volitelné – většina nástrojů se přihlašuje interaktivně
+# 1) Configuration
+cp .env.example .env        # keys are optional – most tools authenticate interactively
 
-# 2) Sestavení image (stáhne a nainstaluje všechny nástroje)
-docker compose build        # nebo: make build
+# 2) Build the image (downloads and installs all tools)
+docker compose build        # or: make build
 
-# 3) Start (běží na pozadí, restart-policy: unless-stopped)
-docker compose up -d        # nebo: make up
+# 3) Start (runs in the background, restart-policy: unless-stopped)
+docker compose up -d        # or: make up
 
-# 4) Vstup do kontejneru jako agent
-make shell                  # nebo: docker compose exec -u agent evilagent bash -l
+# 4) Enter the container as agent
+make shell                  # or: docker compose exec -u agent evilagent bash -l
 ```
 
-Po startu kontejner jen „drží linku" (běží prázdný tmux `main`). Agenty
-**nakonfigurujete a spustíte ručně** – viz níže.
+After start the container simply keeps the tmux session `main` alive. You
+**configure and start agents manually** — see below.
 
 ---
 
-## ⚙️ První konfigurace nástrojů (ručně po startu)
+## First-time tool setup (manual, after first start)
 
-Vstupte dovnitř (`make shell`) a nastavte, co potřebujete. Přihlášení a konfigurace
-se ukládají do trvalých volumes, takže **stačí jednou**.
+Enter the container (`make shell`) and set up what you need. Credentials and
+config are saved to persistent volumes, so **you only need to do this once**.
 
 ### Codex (meta-agent)
 ```bash
-codex                      # interaktivní přihlášení (device flow / API klíč)
-# spuštění jako trvalý agent v tmuxu:
+codex                      # interactive login (device flow / API key)
+# run as a persistent agent inside tmux:
 tmux new -s master 'codex --dangerously-bypass-approvals-and-sandbox'
-#   odpojení: Ctrl+B, pak D        znovupřipojení: tmux attach -t master
+#   detach: Ctrl+B then D        reattach: tmux attach -t master
 ```
-> `--dangerously-*` je zde OK – hranicí je kontejner, ne váš stroj.
+> `--dangerously-*` is safe here – the boundary is the container, not your machine.
 
-### Agent2Telegram (napojení Codexu na Telegram)
+### Agent2Telegram (connect Codex to Telegram)
 ```bash
-# do .env doplňte TELEGRAM_BOT_TOKEN a TELEGRAM_CHAT_ID (od @BotFather), pak:
+# add TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to .env (from @BotFather), then:
 agent2telegram connect
 ```
 
 ### Claude Code
 ```bash
-claude                     # přihlášení (předplatné) nebo ANTHROPIC_API_KEY v .env
+claude                     # login (subscription) or set ANTHROPIC_API_KEY in .env
 claude --dangerously-skip-permissions
 ```
 
@@ -104,142 +106,144 @@ nohup hermes gateway run --replace > ~/hermes.log 2>&1 &
 
 ### OpenClaw
 ```bash
-openclaw onboard           # zkopírujte kód do prohlížeče, URL vložte zpět
+openclaw onboard           # copy the code to a browser, paste the URL back
 nohup openclaw gateway > ~/openclaw.log 2>&1 &
 ```
 
-### AgentsMonitor (monitoring + automatická obnova)
+### AgentsMonitor (monitoring + automatic recovery)
 ```bash
-agentsmon add              # přidá běžící agenty pod dohled
-agentsmon new              # založí nového hlídaného agenta
+agentsmon add              # register running agents for monitoring
+agentsmon new              # create a new monitored agent
 ```
 
 ### Google Antigravity
 ```bash
 agy --dangerously-skip-permissions
 ```
-> Na serveru **nejde přes předplatné**. Použijte Google Cloud projekt / `GEMINI_API_KEY`
-> v `.env`. Google Cloud dává na start $300 kreditu na 3 měsíce zdarma.
+> **Subscription does not work on servers.** Use a Google Cloud project or set
+> `GEMINI_API_KEY` in `.env`. Google Cloud offers $300 of free credit for 3 months.
 
-### Hlasové ovládání (Whisper)
-Kontejner nemá mikrofon – audio nahrajete do `~/workspace` a přepíšete:
+### Voice control (Whisper)
+The container has no microphone. Copy audio into `~/workspace` and transcribe it:
 ```bash
-voice2text ~/workspace/nahravka.m4a small cs
+voice2text ~/workspace/recording.m4a small cs
 ```
-Text pak předáte agentovi. Modely se stáhnou jednou do `~/.cache/whisper`.
-Pro nejlepší češtinu lze místo Whisperu použít **ElevenLabs Scribe** přes API
-(`ELEVENLABS_API_KEY` v `.env`, umí i Text2Voice).
+Then pass the text to an agent. Models are downloaded once to `~/.cache/whisper`.
+For best results with languages other than English, consider **ElevenLabs Scribe**
+via the API (`ELEVENLABS_API_KEY` in `.env`; also supports Text2Voice).
 
 ---
 
-## 💾 Perzistence dat
+## Data persistence
 
-Vše důležité je v pojmenovaných Docker **volumes** a **přežije restart i rebuild image**:
+Everything important lives in named Docker **volumes** and **survives restarts and
+image rebuilds**:
 
-| Volume | Obsah |
+| Volume | Contents |
 |---|---|
-| `codex`, `claude`, `hermes`, `openclaw`, `agent2telegram`, `agentsmon` | konfigurace a přihlášení jednotlivých nástrojů |
-| `config` | XDG konfigurace, `gcloud` |
-| `cache` | mj. stažené Whisper modely |
-| `ssh` | SSH klíče agenta |
-| `workspace` | pracovní adresář / repozitáře / data agentů |
+| `codex`, `claude`, `hermes`, `openclaw`, `agent2telegram`, `agentsmon` | per-tool config and credentials |
+| `config` | XDG config, `gcloud` |
+| `cache` | downloaded Whisper models, etc. |
+| `ssh` | agent SSH keys |
+| `workspace` | working directory / repositories / agent data |
 
-Binárky nástrojů **naopak nejsou** ve volumes – jsou v image. Díky tomu
-`docker compose down` **nesmaže data** a aktualizace nepřepíše konfiguraci.
+Tool binaries are in the image, **not** in volumes. This means `docker compose down`
+**does not delete data** and an image update does not overwrite credentials.
 
-> Data smažete jen explicitně: `docker compose down -v` (pozor, nevratné).
+> To explicitly delete all data: `docker compose down -v` (irreversible).
 
 ---
 
-## 🔄 Aktualizace
+## Updating
 
-Nástroje i systém se aktualizují **přestavením image**; data ve volumes zůstávají:
+Tools and the OS are updated by **rebuilding the image**; volume data is preserved:
 
 ```bash
 make update
-# = záloha  →  docker compose build --pull  →  up -d  →  refresh nástrojů v kontejneru
+# = backup  →  docker compose build --pull  →  up -d  →  tool refresh inside container
 ```
 
-Ruční varianta:
+Manual equivalent:
 ```bash
 docker compose build --pull && docker compose up -d
 ```
 
-Jednotlivé nástroje jsou definované v [`scripts/install-tools.sh`](scripts/install-tools.sh) –
-verze / zdroje upravíte na jednom místě. Aktualizaci nástrojů bez rebuildu:
+All tool sources are defined in [`scripts/install-tools.sh`](scripts/install-tools.sh) –
+update URLs and versions in one place. To refresh tools without a full rebuild:
 ```bash
-make tools     # spustí install-tools.sh uvnitř běžícího kontejneru
+make tools     # runs install-tools.sh inside the running container
 ```
 
 ---
 
-## 🗄️ Zálohování a obnova
+## Backup and restore
 
 ```bash
-make backup                                   # -> backups/<datum>/agent-data.tar.gz
+make backup                                      # -> backups/<date>/agent-data.tar.gz
 ./scripts/restore.sh backups/2026.../agent-data.tar.gz
 ```
-Zálohuje se veškerá konfigurace, přihlášení i `workspace` do jednoho archivu.
+Backs up all config, credentials, and `workspace` into a single archive.
 
 ---
 
-## 🧰 Časté příkazy (`make help`)
+## Common commands (`make help`)
 
-| Příkaz | Význam |
+| Command | Description |
 |---|---|
-| `make up` / `make down` | start / stop (data zůstanou) |
-| `make shell` | shell jako `agent` |
-| `make root-shell` | shell jako `root` (správa) |
-| `make attach` | připojení ke sdílenému tmux `main` |
-| `make logs` | sledování logů |
-| `make health` | přehled dostupnosti nástrojů |
-| `make tools` | reinstalace / update nástrojů |
-| `make update` | kompletní aktualizace |
-| `make backup` | záloha dat |
+| `make up` / `make down` | start / stop (volumes kept) |
+| `make shell` | shell as `agent` |
+| `make root-shell` | shell as `root` (administration) |
+| `make attach` | attach to shared tmux session `main` |
+| `make logs` | follow container logs |
+| `make health` | show tool availability |
+| `make tools` | reinstall / update tools |
+| `make update` | full update |
+| `make backup` | back up agent data |
 
 ---
 
-## 🔒 Zpřísnění sítě (volitelné, pokročilé)
+## Network hardening (optional, advanced)
 
-Agenti potřebují ven kvůli API modelů, takže síť nelze úplně zavřít. Chcete-li
-přesto omezit odchozí provoz jen na povolené domény, nasaďte před kontejner
-**egress proxy** (např. Squid s allow-listem) a přesměrujte přes ni `HTTP(S)_PROXY`.
-Kompletní uzavření sítě (`networks: internal: true`) je připravené v
-`docker-compose.yml` jako komentář – použitelné jen pro agenty bez potřeby internetu.
-
----
-
-## ❓ Řešení potíží
-
-- **Nástroj chybí (`MISS`) po buildu.** Instalátory Agent2Telegram / Hermes /
-  OpenClaw / AgentsMonitor / Antigravity pocházejí z prezentace a jejich URL se
-  mohou lišit nebo být dočasně nedostupné. Build je **záměrně nechá selhat
-  potichu** (aby prošly ostatní nástroje). Ověřte/aktualizujte URL v
-  [`scripts/install-tools.sh`](scripts/install-tools.sh) a spusťte `make tools`.
-  Codex a Claude Code se instalují přes npm a měly by být vždy dostupné.
-- **`sudo` uvnitř nefunguje.** Správně – je záměrně zablokované
-  (`no-new-privileges`). Pro správu použijte `make root-shell`, nebo trvalé
-  změny přidejte do `Dockerfile` a přestavte image.
-- **Agent nemá přístup k souboru na hostiteli.** Kontejner nemá bind-mounty
-  hostitele (bezpečnost). Data dejte do volume `workspace`
-  (`docker compose cp soubor evilagent:/home/agent/workspace/`).
+Agents need outbound internet access for model APIs, so the network cannot be
+fully closed. To restrict outbound traffic to allowed domains, place an
+**egress proxy** (e.g. Squid with an allowlist) in front of the container and
+set `HTTP(S)_PROXY`. Full network isolation (`networks: internal: true`) is
+available as a commented-out option in `docker-compose.yml` — usable only for
+agents that do not need internet access.
 
 ---
 
-## 📁 Struktura projektu
+## Troubleshooting
+
+- **Tool shows `MISS` after build.** The installers for Agent2Telegram, Hermes,
+  OpenClaw, AgentsMonitor, and Antigravity come from the webinar and their URLs
+  may differ or be temporarily unavailable. The build **intentionally lets them
+  fail silently** so other tools still install. Verify/update the URLs in
+  [`scripts/install-tools.sh`](scripts/install-tools.sh) and run `make tools`.
+  Codex and Claude Code install via npm and should always be available.
+- **`sudo` doesn't work inside the container.** Correct — it is intentionally
+  blocked by `no-new-privileges`. Use `make root-shell` for administration, or
+  add permanent changes to the `Dockerfile` and rebuild.
+- **Agent can't access a file from the host.** The container has no host
+  bind-mounts (by design, for security). Copy files into the `workspace` volume:
+  `docker compose cp myfile evilagent:/home/agent/workspace/`.
+
+---
+
+## Project structure
 
 ```
 .
-├── Dockerfile                 # image: Ubuntu + Node + Python + nástroje
-├── docker-compose.yml         # služba, bezpečnost, volumes, limity
-├── .env.example               # šablona tajemství/konfigurace
-├── Makefile                   # zkratky
+├── Dockerfile                 # image: Ubuntu + Node + Python + tools
+├── docker-compose.yml         # service, security, volumes, limits
+├── .env.example               # secrets/config template
+├── Makefile                   # shortcuts
 ├── README.md
 └── scripts/
-    ├── install-tools.sh       # instalace/aktualizace CLI nástrojů (build i runtime)
-    ├── entrypoint.sh          # init volumes + drop na uživatele agent
-    ├── voice2text.sh          # Whisper přepis audio -> text
-    ├── update.sh              # záloha + rebuild + refresh
-    ├── backup.sh              # záloha dat agentů
-    └── restore.sh             # obnova ze zálohy
+    ├── install-tools.sh       # install/update CLI tools (build-time and runtime)
+    ├── entrypoint.sh          # volume init + drop to agent user
+    ├── voice2text.sh          # Whisper audio -> text transcription
+    ├── update.sh              # backup + rebuild + refresh
+    ├── backup.sh              # back up agent data
+    └── restore.sh             # restore from backup
 ```

@@ -1,28 +1,29 @@
 #!/usr/bin/env bash
 ##############################################################################
-# voice2text – přepis audia na text pomocí Whisper (faster-whisper, CPU).
+# voice2text – transcribe audio to text using Whisper (faster-whisper, CPU).
 #
-# Použití:
-#   voice2text <audio_soubor> [model] [jazyk]
-#     model:  tiny | base | small | medium | large-v3   (výchozí: small)
-#     jazyk:  cs | en | ... | auto                      (výchozí: cs)
+# Usage:
+#   voice2text <audio_file> [model] [language]
+#     model:     tiny | base | small | medium | large-v3   (default: small)
+#     language:  cs | en | ... | auto                      (default: cs)
 #
-# Příklad:
-#   voice2text ~/workspace/nahravka.m4a small cs
+# Example:
+#   voice2text ~/workspace/recording.m4a small cs
 #
-# Poznámka k "hlasovému ovládání":
-#   Server / kontejner nemá mikrofon. Postup je: nahrané audio nakopírujte
-#   do ~/workspace, přepište přes voice2text a text předejte agentovi.
-#   Modely se stahují jednou do ~/.cache/whisper (trvalý volume).
+# Note on "voice control":
+#   The server / container has no microphone. The workflow is: copy the
+#   recorded audio into ~/workspace, transcribe it with voice2text, and
+#   pass the resulting text to an agent.
+#   Models are downloaded once to ~/.cache/whisper (persistent volume).
 ##############################################################################
 set -euo pipefail
 
-AUDIO="${1:?Použití: voice2text <audio_soubor> [model] [jazyk]}"
+AUDIO="${1:?Usage: voice2text <audio_file> [model] [language]}"
 MODEL="${2:-small}"
 LANG="${3:-cs}"
 
 if [ ! -f "$AUDIO" ]; then
-  echo "Soubor neexistuje: $AUDIO" >&2
+  echo "File not found: $AUDIO" >&2
   exit 1
 fi
 

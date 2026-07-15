@@ -1,25 +1,25 @@
 #!/usr/bin/env bash
 ##############################################################################
-# Aktualizace EvilAgent. Data ve volumes zůstávají netknutá.
-#   1) záloha,
-#   2) rebuild image (nové verze systému + nástrojů z install-tools.sh),
+# Update EvilAgent. Data in volumes is left untouched.
+#   1) backup,
+#   2) rebuild image (new system packages + tools from install-tools.sh),
 #   3) restart,
-#   4) volitelně refresh nástrojů uvnitř běžícího kontejneru.
+#   4) optionally refresh tools inside the running container.
 ##############################################################################
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-echo "==> 1/4 Záloha dat"
-./scripts/backup.sh || echo "   (záloha přeskočena)"
+echo "==> 1/4 Backing up data"
+./scripts/backup.sh || echo "   (backup skipped)"
 
-echo "==> 2/4 Rebuild image (--pull = aktuální base + nástroje)"
+echo "==> 2/4 Rebuilding image (--pull = latest base + tools)"
 docker compose build --pull
 
-echo "==> 3/4 Restart s novým image (volumes zůstávají)"
+echo "==> 3/4 Restarting with new image (volumes preserved)"
 docker compose up -d
 
-echo "==> 4/4 Aktualizace CLI nástrojů uvnitř kontejneru"
+echo "==> 4/4 Refreshing CLI tools inside the container"
 docker compose exec -u root evilagent \
-  /usr/local/lib/evilagent/install-tools.sh || echo "   (přeskočeno)"
+  /usr/local/lib/evilagent/install-tools.sh || echo "   (skipped)"
 
-echo "Hotovo. Přihlášení nástrojů zůstává zachováno."
+echo "Done. Tool credentials remain intact."

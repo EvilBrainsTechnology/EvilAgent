@@ -1,49 +1,49 @@
-# EvilAgent – zkratky pro časté operace
+# EvilAgent – shortcuts for common operations
 .DEFAULT_GOAL := help
 COMPOSE := docker compose
 
 .PHONY: help build up down restart logs ps shell root-shell attach \
         tools update backup restore health
 
-help: ## Zobrazí tuto nápovědu
+help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 	 | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
-build: ## Postaví image
+build: ## Build the image
 	$(COMPOSE) build
 
-up: ## Spustí kontejner na pozadí
+up: ## Start the container in the background
 	$(COMPOSE) up -d
 
-down: ## Zastaví a odstraní kontejner (volumes ZŮSTANOU)
+down: ## Stop and remove the container (volumes are KEPT)
 	$(COMPOSE) down
 
-restart: ## Restartuje kontejner
+restart: ## Restart the container
 	$(COMPOSE) restart
 
-logs: ## Sleduje logy
+logs: ## Follow container logs
 	$(COMPOSE) logs -f
 
-ps: ## Stav kontejneru
+ps: ## Show container status
 	$(COMPOSE) ps
 
-shell: ## Interaktivní shell jako uživatel 'agent'
+shell: ## Interactive shell as user 'agent'
 	$(COMPOSE) exec -u agent evilagent bash -l
 
-root-shell: ## Shell jako root (správa, apt, ...)
+root-shell: ## Shell as root (system administration, apt, ...)
 	$(COMPOSE) exec -u root evilagent bash -l
 
-attach: ## Připojí se ke sdílenému tmux 'main'
+attach: ## Attach to the shared tmux session 'main'
 	$(COMPOSE) exec -u agent evilagent tmux attach -t main
 
-tools: ## Vypíše stav nainstalovaných nástrojů
+tools: ## Reinstall / update all agent CLI tools
 	$(COMPOSE) exec -u root evilagent /usr/local/lib/evilagent/install-tools.sh
 
-update: ## Aktualizuje vše (rebuild + refresh nástrojů), data zůstanou
+update: ## Full update (rebuild + tool refresh), data is preserved
 	./scripts/update.sh
 
-backup: ## Záloha dat agentů do backups/
+backup: ## Back up agent data to backups/
 	./scripts/backup.sh
 
-health: ## Zdravotní stav kontejneru
+health: ## Check which tools are installed
 	$(COMPOSE) exec -u agent evilagent bash -lc 'for t in codex claude agy hermes openclaw agent2telegram agentsmon; do command -v $$t >/dev/null && echo "OK   $$t" || echo "MISS $$t"; done'

@@ -1,9 +1,9 @@
 ##############################################################################
 # EvilAgent – docker-compose
 #
-# Aktualizace:  docker compose build --pull && docker compose up -d
-#               (data ve volumes zůstanou zachována)
-# Konfigurace:  po prvním startu ručně, viz README.md
+# Update:  docker compose build --pull && docker compose up -d
+#          (data in volumes is preserved)
+# Config:  done manually after first start, see README.md
 ##############################################################################
 services:
   evilagent:
@@ -17,24 +17,24 @@ services:
     container_name: evilagent
     hostname: evilagent
     restart: unless-stopped
-    init: false                       # PID 1 řeší tini z image
+    init: false                       # PID 1 is handled by tini inside the image
     stop_grace_period: 30s
 
-    # Tajemství (API klíče, tokeny) se předávají přes .env – NIKDY v image.
+    # Secrets (API keys, tokens) are passed via .env – NEVER baked into the image.
     env_file:
       - .env
 
-    # ----------------------------- BEZPEČNOST --------------------------------
+    # -------------------------------- SECURITY --------------------------------
     security_opt:
-      - no-new-privileges:true        # proces nemůže eskalovat práva (blokuje setuid/sudo)
+      - no-new-privileges:true        # prevents privilege escalation (blocks setuid/sudo)
     cap_drop:
-      - ALL                           # zahoď všechny Linux capabilities...
-    cap_add:                          # ...a vrať jen minimum pro entrypoint
+      - ALL                           # drop all Linux capabilities ...
+    cap_add:                          # ... and restore only the minimum needed by entrypoint
       - CHOWN
       - FOWNER
-      - SETUID                        # runuser: shození práv root -> agent
+      - SETUID                        # runuser: drop from root to agent
       - SETGID
-    pids_limit: 4096                  # ochrana proti fork-bombě zběsilého agenta
+    pids_limit: 4096                  # guard against a fork-bombing agent
     mem_limit: "${MEM_LIMIT:-6g}"
     memswap_limit: "${MEM_LIMIT:-6g}"
     cpus: "${CPUS:-4}"
@@ -44,18 +44,18 @@ services:
         hard: 16384
     tmpfs:
       - /tmp:size=1g,mode=1777
-    # ZÁMĚRNĚ ZDE NENÍ:
-    #   - mount /var/run/docker.sock  (agent by ovládl celý Docker = útěk z sandboxu)
-    #   - network_mode: host          (agent by viděl síť hostitele)
-    #   - privileged: true            (nikdy)
-    #   - bind-mount citlivých cest z hostitele
+    # INTENTIONALLY ABSENT:
+    #   - /var/run/docker.sock mount  (agent would control all of Docker = sandbox escape)
+    #   - network_mode: host          (agent would see the host network)
+    #   - privileged: true            (never)
+    #   - bind-mounts of sensitive host paths
 
     networks:
       - agentnet
 
-    # -------------------------- TRVALÁ DATA (volumes) ------------------------
-    # Přežijí restart i rebuild image. Binárky nástrojů jsou v image, tady
-    # jsou jen konfigurace, přihlášení a pracovní data agentů.
+    # -------------------------- PERSISTENT DATA (volumes) --------------------
+    # Survive restart and image rebuild. Tool binaries are in the image; only
+    # config, credentials, and agent working data live here.
     volumes:
       - codex:/home/agent/.codex
       - claude:/home/agent/.claude
@@ -85,8 +85,8 @@ services:
 networks:
   agentnet:
     driver: bridge
-    # Volitelně: interní síť bez odchozího přístupu k jiným kontejnerům.
-    # internal: true  # POZOR: agenti pak nemají přístup k internetu/API.
+    # Optional: internal network with no outbound access to other containers.
+    # internal: true  # WARNING: agents will then have no internet/API access.
 
 volumes:
   codex:
