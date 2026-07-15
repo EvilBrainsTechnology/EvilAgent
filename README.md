@@ -54,6 +54,7 @@ Prerequisites: **Docker** + **Docker Compose** on the host.
 
 ```bash
 # 1) Configuration
+cd src
 cp .env.example .env        # keys are optional – most tools authenticate interactively
                             # INSTALL_* flags choose which tools to install (default: all)
 
@@ -66,6 +67,9 @@ docker compose up -d        # or: make up
 # 4) Enter the container as agent
 make shell                  # or: docker compose exec -u agent evilagent bash -l
 ```
+
+> All `make` and `docker compose` commands must be run from the `src/` directory.
+> From the project root use `make -C src <target>` or `cd src` once at the start of a session.
 
 After start the container simply keeps the tmux session `main` alive. You
 **configure and start agents manually** — see below.
@@ -191,7 +195,7 @@ Manual equivalent:
 docker compose build --pull && docker compose up -d
 ```
 
-All tool sources are defined in [`scripts/install-tools.sh`](scripts/install-tools.sh) –
+All tool sources are defined in [`src/scripts/install-tools.sh`](src/scripts/install-tools.sh) –
 update URLs and versions in one place. To refresh tools without a full rebuild:
 ```bash
 make tools     # runs install-tools.sh inside the running container
@@ -203,7 +207,7 @@ make tools     # runs install-tools.sh inside the running container
 
 ```bash
 make backup                                      # -> backups/<date>/agent-data.tar.gz
-./scripts/restore.sh backups/2026.../agent-data.tar.gz
+./src/scripts/restore.sh backups/2026.../agent-data.tar.gz
 ```
 Backs up all config, credentials, and `workspace` into a single archive.
 
@@ -231,7 +235,7 @@ Agents need outbound internet access for model APIs, so the network cannot be
 fully closed. To restrict outbound traffic to allowed domains, place an
 **egress proxy** (e.g. Squid with an allowlist) in front of the container and
 set `HTTP(S)_PROXY`. Full network isolation (`networks: internal: true`) is
-available as a commented-out option in `docker-compose.yml` — usable only for
+available as a commented-out option in `src/docker-compose.yml` — usable only for
 agents that do not need internet access.
 
 ---
@@ -242,11 +246,11 @@ agents that do not need internet access.
   OpenClaw, AgentsMonitor, and Antigravity come from the webinar and their URLs
   may differ or be temporarily unavailable. The build **intentionally lets them
   fail silently** so other tools still install. Verify/update the URLs in
-  [`scripts/install-tools.sh`](scripts/install-tools.sh) and run `make tools`.
+  [`src/scripts/install-tools.sh`](src/scripts/install-tools.sh) and run `make tools`.
   Codex and Claude Code install via npm and should always be available.
 - **`sudo` doesn't work inside the container.** Correct — it is intentionally
   blocked by `no-new-privileges`. Use `make root-shell` for administration, or
-  add permanent changes to the `Dockerfile` and rebuild.
+  add permanent changes to `src/Dockerfile` and rebuild.
 - **Agent can't access a file from the host.** The container has no host
   bind-mounts (by design, for security). Copy files into the `workspace` volume:
   `docker compose cp myfile evilagent:/home/agent/workspace/`.
@@ -257,16 +261,19 @@ agents that do not need internet access.
 
 ```
 .
-├── Dockerfile                 # image: Ubuntu + Node + Python + tools
-├── docker-compose.yml         # service, security, volumes, limits
-├── .env.example               # secrets/config template
-├── Makefile                   # shortcuts
 ├── README.md
-└── scripts/
-    ├── install-tools.sh       # install/update CLI tools (build-time and runtime)
-    ├── entrypoint.sh          # volume init + drop to agent user
-    ├── voice2text.sh          # Whisper audio -> text transcription
-    ├── update.sh              # backup + rebuild + refresh
-    ├── backup.sh              # back up agent data
-    └── restore.sh             # restore from backup
+├── .gitignore
+├── .gitattributes
+└── src/
+    ├── Dockerfile                 # image: Ubuntu + Node + Python + tools
+    ├── docker-compose.yml         # service, security, volumes, limits
+    ├── .env.example               # secrets/config template
+    ├── Makefile                   # shortcuts
+    └── scripts/
+        ├── install-tools.sh       # install/update CLI tools (build-time and runtime)
+        ├── entrypoint.sh          # volume init + drop to agent user
+        ├── voice2text.sh          # Whisper audio -> text transcription
+        ├── update.sh              # backup + rebuild + refresh
+        ├── backup.sh              # back up agent data
+        └── restore.sh             # restore from backup
 ```
