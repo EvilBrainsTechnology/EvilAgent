@@ -12,6 +12,15 @@ services:
       args:
         AGENT_UID: "${AGENT_UID:-1000}"
         AGENT_GID: "${AGENT_GID:-1000}"
+        # Tool selection – configured in .env, defaults to installing everything
+        INSTALL_CODEX: "${INSTALL_CODEX:-true}"
+        INSTALL_CLAUDE_CODE: "${INSTALL_CLAUDE_CODE:-true}"
+        INSTALL_AGENT2TELEGRAM: "${INSTALL_AGENT2TELEGRAM:-true}"
+        INSTALL_HERMES: "${INSTALL_HERMES:-true}"
+        INSTALL_OPENCLAW: "${INSTALL_OPENCLAW:-true}"
+        INSTALL_AGENTSMONITOR: "${INSTALL_AGENTSMONITOR:-true}"
+        INSTALL_ANTIGRAVITY: "${INSTALL_ANTIGRAVITY:-true}"
+        INSTALL_WHISPER: "${INSTALL_WHISPER:-true}"
         INSTALL_OPENAI_WHISPER: "${INSTALL_OPENAI_WHISPER:-false}"
     image: evilagent:latest
     container_name: evilagent
@@ -70,7 +79,9 @@ services:
       - workspace:/home/agent/workspace
 
     healthcheck:
-      test: ["CMD", "bash", "-lc", "command -v codex >/dev/null && command -v claude >/dev/null"]
+      # Checks the keepalive process, not specific tools – which tools exist
+      # is configurable via INSTALL_* (use `make health` for a tool overview).
+      test: ["CMD", "pgrep", "-u", "agent", "-f", "sleep infinity"]
       interval: 1m
       timeout: 10s
       retries: 3

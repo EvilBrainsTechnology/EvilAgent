@@ -44,15 +44,27 @@ RUN userdel -r ubuntu 2>/dev/null || true; \
     groupadd -g ${AGENT_GID} agent 2>/dev/null || true; \
     useradd -m -u ${AGENT_UID} -g ${AGENT_GID} -s /bin/bash agent
 
+# --- Tool selection (configured via .env -> build args) ----------------------
+ARG INSTALL_CODEX=true
+ARG INSTALL_CLAUDE_CODE=true
+ARG INSTALL_AGENT2TELEGRAM=true
+ARG INSTALL_HERMES=true
+ARG INSTALL_OPENCLAW=true
+ARG INSTALL_AGENTSMONITOR=true
+ARG INSTALL_ANTIGRAVITY=true
+ARG INSTALL_WHISPER=true
+ARG INSTALL_OPENAI_WHISPER=false
+
 # --- Whisper (voice control) in an isolated venv -----------------------------
 # Default: lightweight faster-whisper (CPU, int8).
 # Full openai-whisper (torch, ~2 GB) is opt-in via INSTALL_OPENAI_WHISPER=true.
-ARG INSTALL_OPENAI_WHISPER=false
-RUN python3 -m venv /opt/whisper-venv \
- && /opt/whisper-venv/bin/pip install --no-cache-dir -U pip \
- && /opt/whisper-venv/bin/pip install --no-cache-dir faster-whisper \
- && if [ "$INSTALL_OPENAI_WHISPER" = "true" ]; then \
-        /opt/whisper-venv/bin/pip install --no-cache-dir openai-whisper; \
+RUN if [ "$INSTALL_WHISPER" = "true" ]; then \
+        python3 -m venv /opt/whisper-venv \
+     && /opt/whisper-venv/bin/pip install --no-cache-dir -U pip \
+     && /opt/whisper-venv/bin/pip install --no-cache-dir faster-whisper \
+     && if [ "$INSTALL_OPENAI_WHISPER" = "true" ]; then \
+            /opt/whisper-venv/bin/pip install --no-cache-dir openai-whisper; \
+        fi; \
     fi
 
 # --- Route tool config dirs to persistent locations -------------------------
@@ -63,9 +75,17 @@ ENV PATH="/home/agent/.local/bin:${PATH}" \
     NPM_CONFIG_UPDATE_NOTIFIER=false
 
 # --- Install agent CLIs (runs at build time; each step is best-effort) ------
+# INSTALL_* build args control which tools are installed (see .env.example).
 COPY scripts/install-tools.sh /usr/local/lib/evilagent/install-tools.sh
 RUN chmod +x /usr/local/lib/evilagent/install-tools.sh \
- && /usr/local/lib/evilagent/install-tools.sh || true
+ && INSTALL_CODEX="$INSTALL_CODEX" \
+    INSTALL_CLAUDE_CODE="$INSTALL_CLAUDE_CODE" \
+    INSTALL_AGENT2TELEGRAM="$INSTALL_AGENT2TELEGRAM" \
+    INSTALL_HERMES="$INSTALL_HERMES" \
+    INSTALL_OPENCLAW="$INSTALL_OPENCLAW" \
+    INSTALL_AGENTSMONITOR="$INSTALL_AGENTSMONITOR" \
+    INSTALL_ANTIGRAVITY="$INSTALL_ANTIGRAVITY" \
+    /usr/local/lib/evilagent/install-tools.sh || true
 
 # --- Helper scripts ----------------------------------------------------------
 COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh

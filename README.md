@@ -55,6 +55,7 @@ Prerequisites: **Docker** + **Docker Compose** on the host.
 ```bash
 # 1) Configuration
 cp .env.example .env        # keys are optional – most tools authenticate interactively
+                            # INSTALL_* flags choose which tools to install (default: all)
 
 # 2) Build the image (downloads and installs all tools)
 docker compose build        # or: make build
@@ -68,6 +69,28 @@ make shell                  # or: docker compose exec -u agent evilagent bash -l
 
 After start the container simply keeps the tmux session `main` alive. You
 **configure and start agents manually** — see below.
+
+### Choosing which tools to install
+
+You don't have to install (and configure) everything. Each tool has an
+`INSTALL_*` flag in `.env` (default `true`):
+
+```bash
+# example: only Claude Code + Telegram bridge + monitoring
+INSTALL_CODEX=false
+INSTALL_CLAUDE_CODE=true
+INSTALL_AGENT2TELEGRAM=true
+INSTALL_HERMES=false
+INSTALL_OPENCLAW=false
+INSTALL_AGENTSMONITOR=true
+INSTALL_ANTIGRAVITY=false
+INSTALL_WHISPER=false
+```
+
+The flags apply at image build time — after changing them, run
+`docker compose build && docker compose up -d` (or `make update`).
+`make health` shows which tools are present; disabled tools are listed
+as `disabled` instead of missing.
 
 ---
 

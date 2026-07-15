@@ -18,6 +18,12 @@
 ##############################################################################
 set -euo pipefail
 
+if [ ! -x /opt/whisper-venv/bin/python ]; then
+  echo "Whisper is not installed in this image (INSTALL_WHISPER=false)." >&2
+  echo "Set INSTALL_WHISPER=true in .env and rebuild: make update" >&2
+  exit 1
+fi
+
 AUDIO="${1:?Usage: voice2text <audio_file> [model] [language]}"
 MODEL="${2:-small}"
 LANG="${3:-cs}"
